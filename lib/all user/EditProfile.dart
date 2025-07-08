@@ -114,6 +114,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
     if (widget.userType == UserType.makeupArtist) {
       _studioNameController.text = widget.studioName ?? '';
+      // Make sure artistPhone is initialized properly
       _artistPhoneController.text = widget.artistPhone ?? '';
       _artistEmailController.text = widget.artistEmail ?? '';
       _addressController.text = widget.address ?? '';
@@ -179,23 +180,23 @@ class _EditProfilePageState extends State<EditProfilePage> {
       return false;
     }
 
-    // Validate user's personal phone number (required for both types)
-    if (_phoneController.text.isEmpty) {
-      setState(() {
-        _errorMessage = 'Personal phone number is required';
-      });
-      return false;
-    }
+    if (widget.userType == UserType.user) {
+      // For regular users - validate personal phone number
+      if (_phoneController.text.isEmpty) {
+        setState(() {
+          _errorMessage = 'Phone number is required';
+        });
+        return false;
+      }
 
-    if (!_isValidMalaysianPhone(_phoneController.text)) {
-      setState(() {
-        _errorMessage = 'Please enter a valid personal phone number (10-11 digits)';
-      });
-      return false;
-    }
-
-    // Additional validation for makeup artists
-    if (widget.userType == UserType.makeupArtist) {
+      if (!_isValidMalaysianPhone(_phoneController.text)) {
+        setState(() {
+          _errorMessage = 'Please enter a valid phone number (10-11 digits)';
+        });
+        return false;
+      }
+    } else if (widget.userType == UserType.makeupArtist) {
+      // For makeup artists - validate all required fields
       if (_studioNameController.text.isEmpty) {
         setState(() {
           _errorMessage = 'Studio name is required';
