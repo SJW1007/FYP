@@ -383,7 +383,7 @@ class MakeupArtistDetailsPage extends StatelessWidget {
       );
     }
 
-    // Limit reviews to first 5 for display on this page
+    // Limit reviews to first 3 for display on this page
     final reviewsToShow = reviews.take(3).toList();
 
     return Column(

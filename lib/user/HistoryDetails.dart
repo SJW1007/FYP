@@ -375,6 +375,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                       ),
                     ),
                   const SizedBox(height: 24),
+
                     // Cancel button with 3-day restriction
                     if (booking['status'] != 'Cancelled' &&
                         booking['status'] != 'Completed' &&
@@ -446,6 +447,63 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                                   fontStyle: FontStyle.italic,
                                 ),
                                 textAlign: TextAlign.center,
+                              ),
+                            ),
+                        ],
+                      ),
+                    // Review buttons
+                    if (booking['status'] == 'Completed')
+                      Column(
+                        children: [
+                          if (!booking['reviewExists'])
+                          // Write Review Button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () async {
+                                  final result = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => WriteReviewPage(
+                                        appointmentId: widget.appointmentId,
+                                      ),
+                                    ),
+                                  );
+
+                                  // Refresh the page if review was written
+                                  if (result == true) {
+                                    _refreshBookingDetails();
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF923DC3),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                                child: const Text("Write Review", style: TextStyle(color: Colors.white)),
+                              ),
+                            )
+                          else
+                          // View Review Button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => ViewReviewPage(
+                                        appointmentId: widget.appointmentId,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF923DC3),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                                child: const Text("View Review", style: TextStyle(color: Colors.white)),
                               ),
                             ),
                         ],

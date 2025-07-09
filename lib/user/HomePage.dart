@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'MakeupArtistDetails.dart';
-import 'MakeupArtistLocationPage.dart'; // New page for showing location
+import 'MakeupArtistLocationPage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
 import 'dart:io';

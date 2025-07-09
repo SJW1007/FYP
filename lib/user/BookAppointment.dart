@@ -65,6 +65,7 @@ class _BookAppointmentPageState extends State<BookAppointmentPage> {
           .collection('appointments')
           .where('artist_id', isEqualTo: makeupArtistDocRef)
           .where('date', isEqualTo: formattedDate)
+          .where('status', whereIn: ['Confirmed', 'In Progress', 'Pending', 'Completed'])
           .get();
 
       Map<String, int> bookedCount = {};
@@ -213,6 +214,7 @@ class _BookAppointmentPageState extends State<BookAppointmentPage> {
           .where('artist_id', isEqualTo: makeupArtistDocRef)
           .where('date', isEqualTo: date)
           .where('time', isEqualTo: time)
+          .where('status', whereIn: ['Confirmed', 'In Progress','Pending', 'Completed'])
           .get();
 
       final currentBookings = snapshot.docs.length;
