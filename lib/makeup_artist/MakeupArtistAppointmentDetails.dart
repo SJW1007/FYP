@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../all user/ChatPage.dart';
 
 class MakeupArtistAppointmentDetailsPage extends StatefulWidget {
   final String appointmentId;
@@ -104,25 +105,34 @@ class _MakeupArtistAppointmentDetailsPageState
   }
 
   String _formatTime(dynamic time) {
-    if (time is String) {
-      return time;
+    if (time is String && time.isNotEmpty) {
+      return time; // Will show full time_range if it exists
     }
     return 'N/A';
   }
 
   String _getPrice() {
-    // Get price from makeup artist data using artist_id reference
-    if (makeupArtistData != null && makeupArtistData!['price'] != null) {
-      final price = makeupArtistData!['price'];
-      // Handle both string and number types
-      if (price is String) {
-        return price.startsWith('RM') ? price : 'RM$price';
-      } else {
-        return 'RM$price';
+    if (makeupArtistData != null &&
+        makeupArtistData!['price'] != null &&
+        appointmentData != null &&
+        appointmentData!['category'] != null) {
+
+      final priceMap = makeupArtistData!['price'];
+      final category = appointmentData!['category'];
+
+      // If priceMap is a Map and category is a String
+      if (priceMap is Map && category is String) {
+        final price = priceMap[category];
+
+        if (price != null && price.toString().isNotEmpty) {
+          return price.toString().startsWith('RM') ? price : 'RM$price';
+        }
       }
     }
-    return 'RM0';
+
+    return 'RM0'; // Default fallback
   }
+
 
   String _getAddress() {
     // Get address from makeup artist data using artist_id reference
@@ -130,6 +140,161 @@ class _MakeupArtistAppointmentDetailsPageState
       return makeupArtistData!['address'].toString();
     }
     return 'Address not available';
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'in progress':
+        return Colors.orange;
+      case 'completed':
+        return Colors.green;
+      case 'rejected':
+      case 'cancelled':
+        return Colors.red;
+      case 'pending':
+        return Colors.blue;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  void _showImageDialog(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            child: Stack(
+              children: [
+                // Backdrop - tap to close
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    color: Colors.black87,
+                  ),
+                ),
+
+                // Image container
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.all(20),
+                    child: InteractiveViewer(
+                      minScale: 0.5,
+                      maxScale: 4.0,
+                      child: Image.network(
+                        imageUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            padding: const EdgeInsets.all(40),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.error, size: 48, color: Colors.red),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Failed to load image',
+                                  style: TextStyle(color: Colors.red, fontSize: 16),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            padding: const EdgeInsets.all(40),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                value: loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Close button
+                Positioned(
+                  top: 40,
+                  right: 20,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => Navigator.pop(context),
+                      borderRadius: BorderRadius.circular(25),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(25),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.3), width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              spreadRadius: 1,
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Bottom instruction text
+                Positioned(
+                  bottom: 60,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Tap outside or X to close • Pinch to zoom',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -149,7 +314,7 @@ class _MakeupArtistAppointmentDetailsPageState
             icon: const Icon(Icons.arrow_back, color: Colors.black),
             onPressed: () => Navigator.pop(context),
           ),
-          title: const Text("Request Details", style: TextStyle(color: Colors.black)),
+          title: const Text("Booking Details", style: TextStyle(color: Colors.black)),
           centerTitle: true,
           elevation: 0,
         ),
@@ -185,7 +350,7 @@ class _MakeupArtistAppointmentDetailsPageState
                       ),
                       const Expanded(
                         child: Text(
-                          'Request Details',
+                          'Booking Details',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 20,
@@ -271,7 +436,7 @@ class _MakeupArtistAppointmentDetailsPageState
                                         ),
                                         const SizedBox(width: 4),
                                         Text(
-                                          customerData!['phone number'] ?? 'No phone',
+                                          ('0${customerData!['phone number']}') ?? 'No phone',
                                           style: const TextStyle(
                                             fontSize: 14,
                                             color: Colors.black87,
@@ -300,6 +465,26 @@ class _MakeupArtistAppointmentDetailsPageState
                                         ),
                                       ],
                                     ),
+                                    const SizedBox(height: 4),
+                                    // Add Status Row here - exactly like admin page
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.circle,
+                                          size: 12,
+                                          color: _getStatusColor(appointmentData!['status'] ?? 'Unknown'),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          appointmentData!['status'] ?? 'Unknown',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: _getStatusColor(appointmentData!['status'] ?? 'Unknown'),
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
                               ),
@@ -319,7 +504,7 @@ class _MakeupArtistAppointmentDetailsPageState
                           child: Column(
                             children: [
                               _buildDetailRow('Category', appointmentData!['category'] ?? 'N/A'),
-                              _buildDetailRow('Time', _formatTime(appointmentData!['time'])),
+                              _buildDetailRow('Time', _formatTime(appointmentData!['time_range'])),
                               _buildDetailRow('Date', _formatDate(appointmentData!['date'])),
                               _buildDetailRow('Price', _getPrice()),
                               _buildDetailRow('Address', _getAddress()),
@@ -353,7 +538,12 @@ class _MakeupArtistAppointmentDetailsPageState
                               // Check if preferred makeup image exists
                               if (appointmentData!['preferred_makeup'] != null &&
                                   appointmentData!['preferred_makeup'].toString().isNotEmpty)
-                                Container(
+                                GestureDetector( // ADD THIS
+                                  onTap: () => _showImageDialog(
+                                    context,
+                                    appointmentData!['preferred_makeup'],
+                                  ),
+                                child: Container(
                                   width: 120,
                                   height: 160,
                                   decoration: BoxDecoration(
@@ -378,7 +568,7 @@ class _MakeupArtistAppointmentDetailsPageState
                                     ),
                                   ),
                                 )
-                              else
+                                )else
                               // Show "No preferred makeup image" when no image is available
                                 Container(
                                   height: 200,
@@ -394,6 +584,46 @@ class _MakeupArtistAppointmentDetailsPageState
                                   ),
                                 ),
                             ],
+                          ),
+                        ),
+                        const SizedBox(height: 30),
+
+                        // Chat Button
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.symmetric(horizontal: 20),
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              if (customerData != null) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ChatPage(
+                                      artistId: widget.customerId,
+                                      artistName: customerData!['name'] ?? 'Unknown Customer',
+                                      artistProfilePic: customerData!['profile pictures'] ?? '',
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.chat, color: Colors.white),
+                            label: const Text(
+                              'Chat with Customer',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFDA9BF5),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 2,
+                            ),
                           ),
                         ),
 

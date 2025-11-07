@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -16,10 +17,55 @@ class _UpdatePasswordPageState extends State<UpdatePasswordPage> {
   bool _newPasswordVisible = false;
   bool _confirmPasswordVisible = false;
 
-
+  String? userRole;
   bool _isLoading = false;
   String? _errorMessage;
   String? _successMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserRole();
+  }
+
+  Future<void> _fetchUserRole() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (userDoc.exists) {
+          setState(() {
+            userRole = userDoc.data()?['role'] as String?;
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      print('Error fetching user role: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  String _getBackgroundImage() {
+    if (userRole == 'makeup artist' || userRole == 'admin') {
+      return 'assets/purple_background.png';
+    }
+    return 'assets/image_4.png';
+  }
 
   Future<void> _updatePassword() async {
     setState(() {
@@ -75,7 +121,12 @@ class _UpdatePasswordPageState extends State<UpdatePasswordPage> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          Image.asset('assets/image_4.png', fit: BoxFit.cover),
+          Image.asset(
+            _getBackgroundImage(),
+            width: double.infinity,
+            height: double.infinity,
+            fit: BoxFit.cover,
+          ),
           SafeArea(
             child: Column(
               children: [
@@ -105,35 +156,104 @@ class _UpdatePasswordPageState extends State<UpdatePasswordPage> {
                               style: TextStyle(
                                 fontSize: 32,
                                 color: Colors.black87,
+                                fontWeight: FontWeight.bold,
                                 fontFamily: 'Georgia',
                               ),
                             ),
                             const SizedBox(height: 30),
-                            _buildPasswordField(
-                              "New Password",
-                              "Enter Your Password Here",
-                              _newPasswordController,
-                              _newPasswordVisible,
-                                  () {
-                                setState(() {
-                                  _newPasswordVisible = !_newPasswordVisible;
-                                });
-                              },
+
+                            // New Password Field (inlined)
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  "New Password",
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87,
+                                    fontFamily: 'Georgia',
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(30),
+                                    border: Border.all(color: const Color(0xFFFB81EE), width: 1.5),
+                                  ),
+                                  child: TextField(
+                                    controller: _newPasswordController,
+                                    obscureText: !_newPasswordVisible,
+                                    decoration: InputDecoration(
+                                      prefixIcon: const Icon(Icons.lock, color: Color(0xFFFB81EE)),
+                                      hintText: "Enter Your Password Here",
+                                      hintStyle: const TextStyle(color: Colors.grey),
+                                      border: InputBorder.none,
+                                      contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                                      suffixIcon: IconButton(
+                                        icon: Icon(
+                                          _newPasswordVisible ? Icons.visibility : Icons.visibility_off,
+                                          color: const Color(0xFFFB81EE),
+                                        ),
+                                        onPressed: () {
+                                          setState(() {
+                                            _newPasswordVisible = !_newPasswordVisible;
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
 
                             const SizedBox(height: 20),
-                            _buildPasswordField(
-                              "Confirm New Password",
-                              "Confirm Your Password Here",
-                              _confirmPasswordController,
-                              _confirmPasswordVisible,
-                                  () {
-                                setState(() {
-                                  _confirmPasswordVisible =
-                                  !_confirmPasswordVisible;
-                                });
-                              },
+
+                            // Confirm Password Field (inlined)
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  "Confirm New Password",
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87,
+                                    fontFamily: 'Georgia',
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(30),
+                                    border: Border.all(color: const Color(0xFFFB81EE), width: 1.5),
+                                  ),
+                                  child: TextField(
+                                    controller: _confirmPasswordController,
+                                    obscureText: !_confirmPasswordVisible,
+                                    decoration: InputDecoration(
+                                      prefixIcon: const Icon(Icons.lock, color: Color(0xFFFB81EE)),
+                                      hintText: "Confirm Your Password Here",
+                                      hintStyle: const TextStyle(color: Colors.grey),
+                                      border: InputBorder.none,
+                                      contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                                      suffixIcon: IconButton(
+                                        icon: Icon(
+                                          _confirmPasswordVisible ? Icons.visibility : Icons.visibility_off,
+                                          color: const Color(0xFFFB81EE),
+                                        ),
+                                        onPressed: () {
+                                          setState(() {
+                                            _confirmPasswordVisible = !_confirmPasswordVisible;
+                                          });
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
+
                             const SizedBox(height: 30),
                             if (_errorMessage != null)
                               Text(
@@ -158,10 +278,7 @@ class _UpdatePasswordPageState extends State<UpdatePasswordPage> {
                                 padding: const EdgeInsets.symmetric(
                                     vertical: 16, horizontal: 60),
                               ),
-                              child: _isLoading
-                                  ? const CircularProgressIndicator(
-                                  color: Colors.white)
-                                  : const Text(
+                              child:const Text(
                                 "Confirm",
                                 style: TextStyle(
                                   fontFamily: 'Georgia',
@@ -180,55 +297,111 @@ class _UpdatePasswordPageState extends State<UpdatePasswordPage> {
               ],
             ),
           ),
+          if (_isLoading) Container(
+            color: Colors.black54,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFDA9BF5)),
+                      strokeWidth: 3,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Processing...',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Please wait',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Animated dots
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: List.generate(3, (index) {
+                        return AnimatedContainer(
+                          duration: Duration(milliseconds: 600 + (index * 200)),
+                          curve: Curves.easeInOut,
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          height: 8,
+                          width: 8,
+                          decoration: BoxDecoration(
+                            color: Color(0xFFDA9BF5).withOpacity(0.7),
+                            shape: BoxShape.circle,
+                          ),
+                        );
+                      }),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildPasswordField(String label,
-      String hint,
-      TextEditingController controller,
-      bool isVisible,
-      VoidCallback onToggleVisibility,) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: Colors.black87,
-            fontFamily: 'Georgia',
-          ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(30),
-            border: Border.all(color: const Color(0xFFFB81EE), width: 1.5),
-          ),
-          child: TextField(
-            controller: controller,
-            obscureText: !isVisible,
-            decoration: InputDecoration(
-              prefixIcon: const Icon(Icons.lock, color: Color(0xFFFB81EE)),
-              hintText: hint,
-              hintStyle: const TextStyle(color: Colors.grey),
-              border: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(vertical: 14),
-              suffixIcon: IconButton(
-                icon: Icon(
-                  isVisible ? Icons.visibility : Icons.visibility_off,
-                  color: const Color(0xFFFB81EE),
-                ),
-                onPressed: onToggleVisibility,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  // Widget _buildPasswordField(String label,
+  //     String hint,
+  //     TextEditingController controller,
+  //     bool isVisible,
+  //     VoidCallback onToggleVisibility,) {
+  //   return Column(
+  //     crossAxisAlignment: CrossAxisAlignment.start,
+  //     children: [
+  //       Text(
+  //         label,
+  //         style: const TextStyle(
+  //           fontSize: 18,
+  //           fontWeight: FontWeight.w600,
+  //           color: Colors.black87,
+  //           fontFamily: 'Georgia',
+  //         ),
+  //       ),
+  //       const SizedBox(height: 8),
+  //       Container(
+  //         decoration: BoxDecoration(
+  //           borderRadius: BorderRadius.circular(30),
+  //           border: Border.all(color: const Color(0xFFFB81EE), width: 1.5),
+  //         ),
+  //         child: TextField(
+  //           controller: controller,
+  //           obscureText: !isVisible,
+  //           decoration: InputDecoration(
+  //             prefixIcon: const Icon(Icons.lock, color: Color(0xFFFB81EE)),
+  //             hintText: hint,
+  //             hintStyle: const TextStyle(color: Colors.grey),
+  //             border: InputBorder.none,
+  //             contentPadding: const EdgeInsets.symmetric(vertical: 14),
+  //             suffixIcon: IconButton(
+  //               icon: Icon(
+  //                 isVisible ? Icons.visibility : Icons.visibility_off,
+  //                 color: const Color(0xFFFB81EE),
+  //               ),
+  //               onPressed: onToggleVisibility,
+  //             ),
+  //           ),
+  //         ),
+  //       ),
+  //     ],
+  //   );
+  // }
 }
 

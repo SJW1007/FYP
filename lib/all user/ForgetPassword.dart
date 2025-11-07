@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'Login.dart';
-import '../user/Register.dart';
+import 'Register.dart';
 import 'CheckEmail.dart';
 
 class ForgetPasswordPage extends StatefulWidget {
@@ -167,7 +167,7 @@ class _ForgetPasswordPageState extends State<ForgetPasswordPage> {
                           onPressed: () {
                             Navigator.pushReplacement(
                               context,
-                              MaterialPageRoute(builder: (_) => const RegisterPage()),
+                              MaterialPageRoute(builder: (_) => const RegisterPage(role: 'User')),
                             );
                           },
                           child: const Text("Sign Up", style: TextStyle(color: Colors.black)),

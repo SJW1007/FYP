@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:mailer/mailer.dart';
 import 'package:mailer/smtp_server.dart';
 import 'package:blush_up/admin/email_config.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 class AdminMakeUpArtistDetails extends StatefulWidget {
   final String makeupArtistId;
@@ -19,6 +20,7 @@ class AdminMakeUpArtistDetails extends StatefulWidget {
 class _AdminMakeUpArtistDetailsState
     extends State<AdminMakeUpArtistDetails> {
   Map<String, dynamic>? makeupArtistData;
+  Map<String, dynamic>? userData;
   String? profilePictureUrl;
   bool isLoading = true;
   bool isProcessing = false;
@@ -37,7 +39,7 @@ class _AdminMakeUpArtistDetailsState
       final hasPassword = await EmailConfig.hasStoredPassword();
       if (!hasPassword) {
         // Store your Gmail app password here
-        await EmailConfig.setAdminPassword('mblw guyr fxdj ykjz');
+        await EmailConfig.setAdminPassword('uirm ddnd cakm dgbc');
         print('Email password stored securely');
       }
     } catch (e) {
@@ -57,7 +59,8 @@ class _AdminMakeUpArtistDetailsState
         final makeupArtist = makeupArtistDoc.data()!;
         print('Makeup artist data: $makeupArtist');
 
-        // Get profile picture from users collection using document ID
+        // Get user data from users collection using document ID
+        Map<String, dynamic>? userInfo;
         String? profilePicture;
         if (makeupArtist['user_id'] != null) {
           try {
@@ -74,16 +77,17 @@ class _AdminMakeUpArtistDetailsState
                 .doc(userId)
                 .get();
             if (userDoc.exists) {
-              final userData = userDoc.data()!;
-              profilePicture = userData['profile pictures'];
+              userInfo = userDoc.data()!;
+              profilePicture = userInfo['profile pictures'];
             }
           } catch (e) {
-            print('Error loading user profile picture: $e');
+            print('Error loading user data: $e');
           }
         }
 
         setState(() {
           makeupArtistData = makeupArtist;
+          userData = userInfo;
           profilePictureUrl = profilePicture;
           isLoading = false;
         });
@@ -101,76 +105,32 @@ class _AdminMakeUpArtistDetailsState
     }
   }
 
-  // Updated _sendEmail method with SSL certificate handling
-  Future<void> _sendEmail(String recipientEmail, String subject, String body) async {
-    String password = '';
-
+  //_sendStatusEmail method
+  Future<void> _sendStatusEmail(String recipientEmail, String artistName, String status) async {
     try {
-      password = await EmailConfig.adminPassword;
-    } catch (sharedPrefsError) {
-      print('SharedPreferences error: $sharedPrefsError');
-      password = 'mblw guyr fxdj ykjz';
-    }
+      print('Calling Cloud Function to send email...');
 
-    if (password.isEmpty) {
-      throw Exception('Email password not available');
-    }
+      // Call the Cloud Function
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'sendMakeupArtistStatusEmail',
+      );
 
-    // List of SMTP configurations to try
-    final smtpConfigs = [
-      // Configuration 1: Port 587 with STARTTLS
-      SmtpServer(
-        'smtp.gmail.com',
-        port: 587,
-        username: EmailConfig.adminEmail,
-        password: password,
-        ssl: false,
-        allowInsecure: true,
-        ignoreBadCertificate: true,
-      ),
-      // Configuration 2: Port 465 with SSL
-      SmtpServer(
-        'smtp.gmail.com',
-        port: 465,
-        username: EmailConfig.adminEmail,
-        password: password,
-        ssl: true,
-        allowInsecure: true,
-        ignoreBadCertificate: true,
-      ),
-      // Configuration 3: Port 587 without SSL
-      SmtpServer(
-        'smtp.gmail.com',
-        port: 587,
-        username: EmailConfig.adminEmail,
-        password: password,
-        ssl: false,
-        allowInsecure: true,
-        ignoreBadCertificate: true,
-      ),
-    ];
+      final result = await callable.call({
+        'email': recipientEmail,
+        'artistName': artistName,
+        'status': status,
+      });
 
-    final message = Message()
-      ..from = Address(EmailConfig.adminEmail, 'BlushUp Admin')
-      ..recipients.add(recipientEmail)
-      ..subject = subject
-      ..html = body;
+      print('Cloud Function response: ${result.data}');
 
-    // Try each configuration
-    for (int i = 0; i < smtpConfigs.length; i++) {
-      try {
-        print('Attempting to send email with configuration ${i + 1}...');
-        final sendReport = await send(message, smtpConfigs[i]);
-        print('Email sent successfully with configuration ${i + 1}: ${sendReport.toString()}');
-        return; // Success, exit the method
-      } catch (e) {
-        print('Configuration ${i + 1} failed: $e');
-        if (i == smtpConfigs.length - 1) {
-          // Last configuration failed, throw the error
-          throw Exception('All SMTP configurations failed. Last error: $e');
-        }
-        // Continue to next configuration
+      if (result.data['success'] == true) {
+        print('Email sent successfully via Cloud Function');
+      } else {
+        throw Exception('Cloud Function returned unsuccessful status');
       }
+    } catch (e) {
+      print('Error calling Cloud Function: $e');
+      throw Exception('Failed to send email via Cloud Function: $e');
     }
   }
 
@@ -338,32 +298,10 @@ class _AdminMakeUpArtistDetailsState
       final artistEmail = makeupArtistData!['email'] ?? '';
       final artistName = makeupArtistData!['studio_name'] ?? 'Makeup Artist';
 
-      // Send email based on status
+      // Send email via Cloud Function based on status
       if (artistEmail.isNotEmpty) {
         try {
-          String emailSubject;
-          String emailBody;
-
-          switch (status.toLowerCase()) {
-            case 'approved':
-            case 'accepted':
-              emailSubject = 'Application Status Update - Approved';
-              emailBody = _getApproveEmailTemplate(artistName);
-              break;
-            case 'rejected':
-              emailSubject = 'Application Status Update - Rejected';
-              emailBody = _getRejectEmailTemplate(artistName);
-              break;
-            case 'disabled':
-              emailSubject = 'Account Disabled - Action Required';
-              emailBody = _getDisableEmailTemplate(artistName);
-              break;
-            default:
-              emailSubject = 'Application Status Update - $status';
-              emailBody = _getApproveEmailTemplate(artistName); // Default template
-          }
-
-          await _sendEmail(artistEmail, emailSubject, emailBody);
+          await _sendStatusEmail(artistEmail, artistName, status);
         } catch (emailError) {
           print('Failed to send email: $emailError');
           // Continue with the process even if email fails
@@ -383,19 +321,23 @@ class _AdminMakeUpArtistDetailsState
       switch (status.toLowerCase()) {
         case 'approved':
         case 'accepted':
-          successMessage = 'Makeup artist approved successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
+          successMessage =
+          'Makeup artist approved successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
           backgroundColor = Colors.green;
           break;
         case 'rejected':
-          successMessage = 'Makeup artist rejected successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
+          successMessage =
+          'Makeup artist rejected successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
           backgroundColor = Colors.red;
           break;
         case 'disabled':
-          successMessage = 'Account disabled successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
+          successMessage =
+          'Account disabled successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
           backgroundColor = Colors.orange;
           break;
         default:
-          successMessage = 'Status updated to $status successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
+          successMessage =
+          'Status updated to $status successfully${artistEmail.isNotEmpty ? ' and email sent' : ''}';
           backgroundColor = const Color(0xFFB968C7);
       }
 
@@ -405,7 +347,6 @@ class _AdminMakeUpArtistDetailsState
           backgroundColor: backgroundColor,
         ),
       );
-
     } catch (e) {
       print('Error updating status: $e');
       setState(() {
@@ -421,78 +362,16 @@ class _AdminMakeUpArtistDetailsState
     }
   }
 
-  // Future<void> _disableAccount() async {
-  //   setState(() {
-  //     isProcessing = true;
-  //   });
-  //
-  //   try {
-  //     if (makeupArtistData!['user_id'] != null) {
-  //       String userId;
-  //       // Handle DocumentReference or string user_id
-  //       if (makeupArtistData!['user_id'] is DocumentReference) {
-  //         userId = makeupArtistData!['user_id'].id;
-  //       } else {
-  //         userId = makeupArtistData!['user_id'].toString();
-  //       }
-  //
-  //       // Update the makeup artist's status to 'Disabled'
-  //       await FirebaseFirestore.instance
-  //           .collection('makeup_artists')
-  //           .doc(widget.makeupArtistId)
-  //           .update({'status': 'Disabled'});
-  //
-  //       // Get artist email and name for email notification
-  //       final artistEmail = makeupArtistData!['email'] ?? '';
-  //       final artistName = makeupArtistData!['studio_name'] ?? 'Makeup Artist';
-  //
-  //       // Send disable email
-  //       if (artistEmail.isNotEmpty) {
-  //         try {
-  //           final disableEmailSubject = 'Account Disabled - Action Required';
-  //           final disableEmailBody = _getDisableEmailTemplate(artistName);
-  //           await _sendEmail(artistEmail, disableEmailSubject, disableEmailBody);
-  //         } catch (emailError) {
-  //           print('Failed to send disable email: $emailError');
-  //         }
-  //       }
-  //
-  //       // Update local data to reflect the change in UI
-  //       setState(() {
-  //         makeupArtistData!['status'] = 'Disabled';
-  //         isProcessing = false;
-  //       });
-  //
-  //       // Show success message
-  //       ScaffoldMessenger.of(context).showSnackBar(
-  //         const SnackBar(
-  //           content: Text('Account disabled successfully and email sent'),
-  //           backgroundColor: Colors.red,
-  //         ),
-  //       );
-  //     }
-  //   } catch (e) {
-  //     print('Error disabling account: $e');
-  //     setState(() {
-  //       isProcessing = false;
-  //     });
-  //
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(
-  //         content: Text('Error disabling account: $e'),
-  //         backgroundColor: Colors.red,
-  //       ),
-  //     );
-  //   }
-  // }
-
   List<String> _getPortfolioImages() {
     if (makeupArtistData != null && makeupArtistData!['portfolio'] != null) {
       final portfolio = makeupArtistData!['portfolio'];
       if (portfolio is List) {
         // Convert to List<String> and take max 6 images
         return portfolio
-            .where((item) => item != null && item.toString().isNotEmpty)
+            .where((item) =>
+        item != null && item
+            .toString()
+            .isNotEmpty)
             .map((item) => item.toString())
             .take(6)
             .toList();
@@ -518,19 +397,6 @@ class _AdminMakeUpArtistDetailsState
       return makeupArtistData!['working hour'].toString();
     }
     return 'N/A';
-  }
-
-  String _getPrice() {
-    if (makeupArtistData != null && makeupArtistData!['price'] != null) {
-      final price = makeupArtistData!['price'];
-      // Handle both string and number types
-      if (price is String) {
-        return price.startsWith('RM') ? price : 'RM$price';
-      } else {
-        return 'RM$price';
-      }
-    }
-    return 'RM0';
   }
 
   String _getStatus() {
@@ -563,25 +429,28 @@ class _AdminMakeUpArtistDetailsState
   }) async {
     String title;
     String content;
-    Color confirmButtonColor;
 
     switch (action.toLowerCase()) {
       case 'accept':
       case 'approve':
         title = 'Confirm Approval';
-        content = 'Are you sure you want to approve "$studioName" as a makeup artist? This will allow them to start accepting bookings.';
+        content =
+        'Are you sure you want to approve "$studioName" as a makeup artist? This will allow them to start accepting bookings.';
         break;
       case 'reject':
         title = 'Confirm Rejection';
-        content = 'Are you sure you want to reject "$studioName"\'s application? This will disable their account and they won\'t be able to access the platform.';
+        content =
+        'Are you sure you want to reject "$studioName"\'s application? This will disable their account and they won\'t be able to access the platform.';
         break;
       case 'disable':
         title = 'Confirm Account Disable';
-        content = 'Are you sure you want to disable "$studioName"\'s account? This will prevent them from accessing the platform and accepting new bookings.';
+        content =
+        'Are you sure you want to disable "$studioName"\'s account? This will prevent them from accessing the platform and accepting new bookings.';
         break;
       default:
         title = 'Confirm Action';
-        content = 'Are you sure you want to perform this action on "$studioName"?';
+        content =
+        'Are you sure you want to perform this action on "$studioName"?';
     }
 
     return showDialog<void>(
@@ -626,81 +495,142 @@ class _AdminMakeUpArtistDetailsState
     return status == 'pending' || status == 'approved' || status == 'accepted';
   }
 
-  Widget _buildPortfolioSection() {
-    List<String> portfolioImages = _getPortfolioImages();
+  void _showImageDialog(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            child: Stack(
+              children: [
+                // Backdrop - tap to close
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    color: Colors.black87,
+                  ),
+                ),
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Portfolio:',
-          style: TextStyle(
-            fontSize: 18,
-            color: Colors.black,
-          ),
-        ),
-        portfolioImages.isEmpty
-            ? Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Center(
-            child: Text(
-              'No portfolio images available',
-              style: TextStyle(
-                color: Colors.grey,
-                fontSize: 16,
-              ),
-            ),
-          ),
-        )
-            : GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 1.0,
-          ),
-          itemCount: portfolioImages.length,
-          itemBuilder: (context, index) {
-            return Container(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  portfolioImages[index],
-                  width: 160,
-                  height: 160,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      color: Colors.grey.shade200,
-                      child: const Center(
-                        child: Icon(
-                          Icons.image_not_supported,
-                          color: Colors.grey,
-                          size: 40,
+                // Image container
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.all(20),
+                    child: InteractiveViewer(
+                      minScale: 0.5,
+                      maxScale: 4.0,
+                      child: Image.network(
+                        imageUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.error, size: 48, color: Colors.red),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Failed to load image',
+                                  style: TextStyle(color: Colors.red, fontSize: 16),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            padding: const EdgeInsets.all(40),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                value: loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Close button
+                Positioned(
+                  top: 40,
+                  right: 20,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => Navigator.pop(context),
+                      borderRadius: BorderRadius.circular(25),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(25),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.3), width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              spreadRadius: 1,
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.white,
+                          size: 24,
                         ),
                       ),
-                    );
-                  },
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Container(
-                      color: Colors.grey.shade200,
-                      child: const Center(
-                        child: CircularProgressIndicator(),
-                      ),
-                    );
-                  },
+                    ),
+                  ),
                 ),
-              ),
-            );
-          },
-        ),
-      ],
+
+                // Bottom instruction text
+                Positioned(
+                  bottom: 60,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Tap outside or X to close • Pinch to zoom',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -721,12 +651,76 @@ class _AdminMakeUpArtistDetailsState
             icon: const Icon(Icons.arrow_back, color: Colors.black),
             onPressed: () => Navigator.of(context).pop(),
           ),
-          title: const Text("Makeup Artist Details", style: TextStyle(color: Colors.black)),
+          title: const Text(
+              "Makeup Artist Details", style: TextStyle(color: Colors.black)),
           centerTitle: true,
           elevation: 0,
         ),
         body: const Center(
           child: Text('Makeup artist not found'),
+        ),
+      );
+    }
+
+    // Get portfolio images inline
+    List<String> portfolioImages = _getPortfolioImages();
+
+    // Get categories and prices inline
+    List<String> categories = [];
+    if (makeupArtistData != null && makeupArtistData!['category'] != null) {
+      final categoryData = makeupArtistData!['category'];
+      if (categoryData is List) {
+        categories = categoryData.map((item) => item.toString()).toList();
+      }
+    }
+
+    Map<String, String> prices = {};
+    if (makeupArtistData != null && makeupArtistData!['price'] != null) {
+      final priceData = makeupArtistData!['price'];
+      if (priceData is Map<String, dynamic>) {
+        prices = priceData.map((key, value) => MapEntry(key, value.toString()));
+      }
+    }
+
+    // Create formatted category-price rows
+    List<Widget> categoryPriceWidgets = [];
+    for (int i = 0; i < categories.length; i++) {
+      String category = categories[i];
+      String price = prices[category] ?? 'Price not set';
+
+      // Ensure price starts with RM
+      if (price != 'Price not set' && !price.startsWith('RM')) {
+        price = 'RM$price';
+      }
+
+      categoryPriceWidgets.add(
+        Padding(
+          padding: EdgeInsets.only(bottom: i == categories.length - 1 ? 0 : 8),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: Text(
+                  category,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Colors.black87,
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 3,
+                child: Text(
+                  price,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Colors.black87,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -758,7 +752,7 @@ class _AdminMakeUpArtistDetailsState
                     ),
                     const Expanded(
                       child: Text(
-                        'Makeup Artist Details',
+                        'Artist Details',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 20,
@@ -799,7 +793,8 @@ class _AdminMakeUpArtistDetailsState
                                 color: const Color(0xFFFFB347),
                               ),
                               child: ClipOval(
-                                child: profilePictureUrl != null && profilePictureUrl!.isNotEmpty
+                                child: profilePictureUrl != null &&
+                                    profilePictureUrl!.isNotEmpty
                                     ? Image.network(
                                   profilePictureUrl!,
                                   fit: BoxFit.cover,
@@ -826,7 +821,8 @@ class _AdminMakeUpArtistDetailsState
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    makeupArtistData!['studio_name'] ?? 'Unknown Artist',
+                                    makeupArtistData!['studio_name'] ??
+                                        'Unknown Artist',
                                     style: const TextStyle(
                                       fontSize: 18,
                                       fontWeight: FontWeight.w600,
@@ -839,11 +835,12 @@ class _AdminMakeUpArtistDetailsState
                                       const Icon(
                                         Icons.phone,
                                         size: 16,
-                                        color: Colors.black87,
+                                        color: Colors.deepPurpleAccent,
                                       ),
                                       const SizedBox(width: 4),
                                       Text(
-                                        makeupArtistData!['phone_number'] ?? 'No phone',
+                                        ('0${makeupArtistData!['phone_number']
+                                            .toString()}') ?? 'No phone',
                                         style: const TextStyle(
                                           fontSize: 14,
                                           color: Colors.black87,
@@ -857,12 +854,13 @@ class _AdminMakeUpArtistDetailsState
                                       const Icon(
                                         Icons.email,
                                         size: 16,
-                                        color: Colors.black87,
+                                        color: Colors.deepPurpleAccent,
                                       ),
                                       const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
-                                          makeupArtistData!['email'] ?? 'No email',
+                                          makeupArtistData!['email'] ??
+                                              'No email',
                                           style: const TextStyle(
                                             fontSize: 14,
                                             color: Colors.black87,
@@ -900,6 +898,120 @@ class _AdminMakeUpArtistDetailsState
 
                       const SizedBox(height: 24),
 
+                      // Personal Information Section (inline)
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3E5F5),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Personal Information',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            // Name detail row inline
+                            Column(
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 150,
+                                      child: Text(
+                                        'Name',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        userData?['name'] ?? 'N/A',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                            ),
+                            // Email detail row inline
+                            Column(
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 150,
+                                      child: Text(
+                                        'Email',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        userData?['email'] ?? 'N/A',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                            ),
+                            // Phone Number detail row inline (last one, no spacing)
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  width: 150,
+                                  child: Text(
+                                    'Phone Number',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    ('0${userData?['phone number']
+                                        .toString()}') ?? 'N/A',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 24),
+
                       // Makeup Artist Details Section
                       Container(
                         padding: const EdgeInsets.all(20),
@@ -909,22 +1021,265 @@ class _AdminMakeUpArtistDetailsState
                         ),
                         child: Column(
                           children: [
-                            _buildDetailRow('Category', makeupArtistData!['category'] ?? 'N/A'),
-                            _buildDetailRow('Price', _getPrice()),
-                            _buildDetailRow('Address', makeupArtistData!['address'] ?? 'Address not available'),
-                            _buildDetailRow('Working Days', _getWorkingDays()),
-                            _buildDetailRow('Working Hours', _getWorkingHours()),
-                            _buildDetailRow('About', makeupArtistData!['about'] ?? 'About not available', isLast: true),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Studio Information',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const SizedBox(
+                                      width: 150,
+                                      child: Text(
+                                        'Services & Pricing',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: categoryPriceWidgets.isEmpty
+                                          ? const Text(
+                                        'No services available',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      )
+                                          : Column(
+                                        crossAxisAlignment: CrossAxisAlignment
+                                            .start,
+                                        children: categoryPriceWidgets,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                            ),
+                            // Address detail row inline
+                            Column(
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 150,
+                                      child: Text(
+                                        'Address',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        makeupArtistData!['address'] ??
+                                            'Address not available',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                            ),
+                            // Working Days detail row inline
+                            Column(
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 150,
+                                      child: Text(
+                                        'Working Days',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        _getWorkingDays(),
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                            ),
+                            // Working Hours detail row inline
+                            Column(
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 150,
+                                      child: Text(
+                                        'Working Hours',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        _getWorkingHours(),
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                            ),
+                            // About detail row inline (last one, no spacing)
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  width: 150,
+                                  child: Text(
+                                    'About',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    makeupArtistData!['about'] ??
+                                        'About not available',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                       ),
-                      // Portfolio Section
+
+                      // Portfolio Section (inline)
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: _buildPortfolioSection(),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Portfolio:',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.black,
+                              ),
+                            ),
+                            portfolioImages.isEmpty
+                                ? Container(
+                              width: double.infinity,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Center(
+                                child: Text(
+                                  'No portfolio images available',
+                                  style: TextStyle(
+                                    color: Colors.grey,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            )
+                                : GridView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                crossAxisSpacing: 12,
+                                mainAxisSpacing: 12,
+                                childAspectRatio: 1.0,
+                              ),
+                              itemCount: portfolioImages.length,
+                              itemBuilder: (context, index) {
+                                return GestureDetector(
+                                    onTap: () => _showImageDialog(
+                                        context,
+                                        portfolioImages[index]
+                                    ),
+                                    child: Container(
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: Image.network(
+                                          portfolioImages[index],
+                                      width: 160,
+                                      height: 160,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (context, error,
+                                          stackTrace) {
+                                        return Container(
+                                          color: Colors.grey.shade200,
+                                          child: const Center(
+                                            child: Icon(
+                                              Icons.image_not_supported,
+                                              color: Colors.grey,
+                                              size: 40,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      loadingBuilder: (context, child,
+                                          loadingProgress) {
+                                        if (loadingProgress == null)
+                                          return child;
+                                        return Container(
+                                          color: Colors.grey.shade200,
+                                          child: const Center(
+                                            child: CircularProgressIndicator(),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                )
+                                );
+                              },
+                            ),
+                          ],
+                        ),
                       ),
 
                       const SizedBox(height: 24),
@@ -938,29 +1293,27 @@ class _AdminMakeUpArtistDetailsState
                                 children: [
                                   Expanded(
                                     child: ElevatedButton(
-                                      onPressed: isProcessing ? null : () => _showConfirmationDialog(
-                                        action: 'Approve',
-                                        studioName: makeupArtistData!['studio_name'] ?? 'this makeup artist',
-                                        onConfirm: () => _updateMakeupArtistStatus('Approved'),
-                                      ),
+                                      onPressed: isProcessing ? null : () =>
+                                          _showConfirmationDialog(
+                                            action: 'Approve',
+                                            studioName: makeupArtistData!['studio_name'] ??
+                                                'this makeup artist',
+                                            onConfirm: () =>
+                                                _updateMakeupArtistStatus(
+                                                    'Approved'),
+                                          ),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: Colors.green,
                                         foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(vertical: 16),
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 16),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(
+                                              12),
                                         ),
                                       ),
-                                      child: isProcessing
-                                          ? const SizedBox(
-                                        height: 20,
-                                        width: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                        ),
-                                      )
-                                          : const Text(
+                                      child:
+                                      const Text(
                                         'Approve',
                                         style: TextStyle(
                                           fontSize: 16,
@@ -972,29 +1325,26 @@ class _AdminMakeUpArtistDetailsState
                                   const SizedBox(width: 16),
                                   Expanded(
                                     child: ElevatedButton(
-                                      onPressed: isProcessing ? null : () => _showConfirmationDialog(
-                                        action: 'Reject',
-                                        studioName: makeupArtistData!['studio_name'] ?? 'this makeup artist',
-                                        onConfirm: () => _updateMakeupArtistStatus('Rejected'),
-                                      ),
+                                      onPressed: isProcessing ? null : () =>
+                                          _showConfirmationDialog(
+                                            action: 'Reject',
+                                            studioName: makeupArtistData!['studio_name'] ??
+                                                'this makeup artist',
+                                            onConfirm: () =>
+                                                _updateMakeupArtistStatus(
+                                                    'Rejected'),
+                                          ),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: Colors.red,
                                         foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(vertical: 16),
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 16),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(
+                                              12),
                                         ),
                                       ),
-                                      child: isProcessing
-                                          ? const SizedBox(
-                                        height: 20,
-                                        width: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                        ),
-                                      )
-                                          : const Text(
+                                      child: const Text(
                                         'Reject',
                                         style: TextStyle(
                                           fontSize: 16,
@@ -1005,41 +1355,39 @@ class _AdminMakeUpArtistDetailsState
                                   ),
                                 ],
                               )
-                            else if (_getStatus().toLowerCase() == 'approved' || _getStatus().toLowerCase() == 'accepted')
-                              Container(
-                                width: double.infinity,
-                                child: ElevatedButton(
-                                  onPressed: isProcessing ? null : () => _showConfirmationDialog(
-                                    action: 'Disable',
-                                    studioName: makeupArtistData!['studio_name'] ?? 'this makeup artist',
-                                    onConfirm: () => _updateMakeupArtistStatus('Disabled'),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.orange,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
+                            else
+                              if (_getStatus().toLowerCase() == 'approved' ||
+                                  _getStatus().toLowerCase() == 'accepted')
+                                Container(
+                                  width: double.infinity,
+                                  child: ElevatedButton(
+                                    onPressed: isProcessing ? null : () =>
+                                        _showConfirmationDialog(
+                                          action: 'Disable',
+                                          studioName: makeupArtistData!['studio_name'] ??
+                                              'this makeup artist',
+                                          onConfirm: () =>
+                                              _updateMakeupArtistStatus(
+                                                  'Disabled'),
+                                        ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.orange,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 16),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
                                     ),
-                                  ),
-                                  child: isProcessing
-                                      ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                    ),
-                                  )
-                                      : const Text(
-                                    'Disable Account',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
+                                    child: const Text(
+                                      'Disable Account',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
                             const SizedBox(height: 24),
                           ],
                         )
@@ -1054,8 +1402,13 @@ class _AdminMakeUpArtistDetailsState
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Text(
-                                _getStatus() == 'Accepted' || _getStatus() == 'Approved' ? 'Application Approved' :
-                                _getStatus() == 'Rejected' ? 'Application Rejected' :
+                                _getStatus() == 'Accepted' ||
+                                    _getStatus() == 'Approved'
+                                    ? 'Application Approved'
+                                    :
+                                _getStatus() == 'Rejected'
+                                    ? 'Application Rejected'
+                                    :
                                 'Application ${_getStatus()}',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
@@ -1074,41 +1427,729 @@ class _AdminMakeUpArtistDetailsState
               ),
             ],
           ),
+          if (isProcessing)
+          // Loading overlay inline
+            Container(
+              color: Colors.black54,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                            Color(0xFFDA9BF5)),
+                        strokeWidth: 3,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Processing...',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Please wait',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Animated dots
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: List.generate(3, (index) {
+                          return AnimatedContainer(
+                            duration: Duration(
+                                milliseconds: 600 + (index * 200)),
+                            curve: Curves.easeInOut,
+                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                            height: 8,
+                            width: 8,
+                            decoration: BoxDecoration(
+                              color: Color(0xFFDA9BF5).withOpacity(0.7),
+                              shape: BoxShape.circle,
+                            ),
+                          );
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
-
-  Widget _buildDetailRow(String label, String value, {bool isLast = false}) {
-    return Column(
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 150,
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-            Expanded(
-              child: Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-          ],
-        ),
-        if (!isLast) const SizedBox(height: 16),
-      ],
-    );
-  }
 }
+
+//   Widget _buildPortfolioSection() {
+//     List<String> portfolioImages = _getPortfolioImages();
+//
+//     return Column(
+//       crossAxisAlignment: CrossAxisAlignment.start,
+//       children: [
+//         const Text(
+//           'Portfolio:',
+//           style: TextStyle(
+//             fontSize: 18,
+//             color: Colors.black,
+//           ),
+//         ),
+//         portfolioImages.isEmpty
+//             ? Container(
+//           width: double.infinity,
+//           decoration: BoxDecoration(
+//             borderRadius: BorderRadius.circular(12),
+//           ),
+//           child: const Center(
+//             child: Text(
+//               'No portfolio images available',
+//               style: TextStyle(
+//                 color: Colors.grey,
+//                 fontSize: 16,
+//               ),
+//             ),
+//           ),
+//         )
+//             : GridView.builder(
+//           shrinkWrap: true,
+//           physics: const NeverScrollableScrollPhysics(),
+//           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+//             crossAxisCount: 2,
+//             crossAxisSpacing: 12,
+//             mainAxisSpacing: 12,
+//             childAspectRatio: 1.0,
+//           ),
+//           itemCount: portfolioImages.length,
+//           itemBuilder: (context, index) {
+//             return Container(
+//               child: ClipRRect(
+//                 borderRadius: BorderRadius.circular(12),
+//                 child: Image.network(
+//                   portfolioImages[index],
+//                   width: 160,
+//                   height: 160,
+//                   fit: BoxFit.cover,
+//                   errorBuilder: (context, error, stackTrace) {
+//                     return Container(
+//                       color: Colors.grey.shade200,
+//                       child: const Center(
+//                         child: Icon(
+//                           Icons.image_not_supported,
+//                           color: Colors.grey,
+//                           size: 40,
+//                         ),
+//                       ),
+//                     );
+//                   },
+//                   loadingBuilder: (context, child, loadingProgress) {
+//                     if (loadingProgress == null) return child;
+//                     return Container(
+//                       color: Colors.grey.shade200,
+//                       child: const Center(
+//                         child: CircularProgressIndicator(),
+//                       ),
+//                     );
+//                   },
+//                 ),
+//               ),
+//             );
+//           },
+//         ),
+//       ],
+//     );
+//   }
+//
+//   Widget _buildCategoryPriceSection() {
+//     List<Widget> categoryPriceWidgets = [];
+//
+//     // Get categories
+//     List<String> categories = [];
+//     if (makeupArtistData != null && makeupArtistData!['category'] != null) {
+//       final categoryData = makeupArtistData!['category'];
+//       if (categoryData is List) {
+//         categories = categoryData.map((item) => item.toString()).toList();
+//       }
+//     }
+//
+//     // Get prices
+//     Map<String, String> prices = {};
+//     if (makeupArtistData != null && makeupArtistData!['price'] != null) {
+//       final priceData = makeupArtistData!['price'];
+//       if (priceData is Map<String, dynamic>) {
+//         prices = priceData.map((key, value) => MapEntry(key, value.toString()));
+//       }
+//     }
+//
+//     // Create formatted category-price rows
+//     for (int i = 0; i < categories.length; i++) {
+//       String category = categories[i];
+//       String price = prices[category] ?? 'Price not set';
+//
+//       // Ensure price starts with RM
+//       if (price != 'Price not set' && !price.startsWith('RM')) {
+//         price = 'RM$price';
+//       }
+//
+//       categoryPriceWidgets.add(
+//         Padding(
+//           padding: EdgeInsets.only(bottom: i == categories.length - 1 ? 0 : 8),
+//           child: Row(
+//             children: [
+//               Expanded(
+//                 flex: 3,
+//                 child: Text(
+//                   category,
+//                   style: const TextStyle(
+//                     fontSize: 14,
+//                     color: Colors.black87,
+//                   ),
+//                 ),
+//               ),
+//               Expanded(
+//                 flex: 2,
+//                 child: Text(
+//                   price,
+//                   style: const TextStyle(
+//                     fontSize: 14,
+//                     color: Colors.black87,
+//                     fontWeight: FontWeight.w500,
+//                   ),
+//                   textAlign: TextAlign.right,
+//                 ),
+//               ),
+//             ],
+//           ),
+//         ),
+//       );
+//     }
+//
+//     if (categoryPriceWidgets.isEmpty) {
+//       return const Text(
+//         'No services available',
+//         style: TextStyle(
+//           fontSize: 14,
+//           color: Colors.black87,
+//         ),
+//       );
+//     }
+//
+//     return Column(
+//       crossAxisAlignment: CrossAxisAlignment.start,
+//       children: categoryPriceWidgets,
+//     );
+//   }
+//
+//   Widget _buildPersonalInfoSection() {
+//     return Container(
+//       padding: const EdgeInsets.all(20),
+//       decoration: BoxDecoration(
+//         color: const Color(0xFFF3E5F5),
+//         borderRadius: BorderRadius.circular(16),
+//       ),
+//       child: Column(
+//         crossAxisAlignment: CrossAxisAlignment.start,
+//         children: [
+//           const Text(
+//             'Personal Information',
+//             style: TextStyle(
+//               fontSize: 18,
+//               fontWeight: FontWeight.w600,
+//               color: Colors.black,
+//             ),
+//           ),
+//           const SizedBox(height: 16),
+//           _buildDetailRow('Name', userData?['name'] ?? 'N/A'),
+//           _buildDetailRow('Email', userData?['email'] ?? 'N/A'),
+//           _buildDetailRow('Phone Number', ('0${userData?['phone number'].toString()}') ?? 'N/A', isLast: true),
+//         ],
+//       ),
+//     );
+//   }
+//   Widget _buildLoading() {
+//     return Container(
+//       color: Colors.black54,
+//       child: Center(
+//         child: Container(
+//           padding: const EdgeInsets.all(24),
+//           decoration: BoxDecoration(
+//             color: Colors.white,
+//             borderRadius: BorderRadius.circular(16),
+//           ),
+//           child: Column(
+//             mainAxisSize: MainAxisSize.min,
+//             children: [
+//               const CircularProgressIndicator(
+//                 valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFDA9BF5)),
+//                 strokeWidth: 3,
+//               ),
+//               const SizedBox(height: 16),
+//               const Text(
+//                 'Processing...',
+//                 style: TextStyle(
+//                   fontSize: 18,
+//                   fontWeight: FontWeight.w600,
+//                   color: Colors.black87,
+//                 ),
+//               ),
+//               const SizedBox(height: 8),
+//               const Text(
+//                 'Please wait',
+//                 style: TextStyle(
+//                   fontSize: 14,
+//                   color: Colors.grey,
+//                 ),
+//               ),
+//               const SizedBox(height: 16),
+//               // Animated dots
+//               Row(
+//                 mainAxisSize: MainAxisSize.min,
+//                 children: List.generate(3, (index) {
+//                   return AnimatedContainer(
+//                     duration: Duration(milliseconds: 600 + (index * 200)),
+//                     curve: Curves.easeInOut,
+//                     margin: const EdgeInsets.symmetric(horizontal: 2),
+//                     height: 8,
+//                     width: 8,
+//                     decoration: BoxDecoration(
+//                       color: Color(0xFFDA9BF5).withOpacity(0.7),
+//                       shape: BoxShape.circle,
+//                     ),
+//                   );
+//                 }),
+//               ),
+//             ],
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     if (isLoading) {
+//       return Scaffold(
+//         body: const Center(
+//           child: CircularProgressIndicator(),
+//         ),
+//       );
+//     }
+//
+//     if (makeupArtistData == null) {
+//       return Scaffold(
+//         appBar: AppBar(
+//           leading: IconButton(
+//             icon: const Icon(Icons.arrow_back, color: Colors.black),
+//             onPressed: () => Navigator.of(context).pop(),
+//           ),
+//           title: const Text("Makeup Artist Details", style: TextStyle(color: Colors.black)),
+//           centerTitle: true,
+//           elevation: 0,
+//         ),
+//         body: const Center(
+//           child: Text('Makeup artist not found'),
+//         ),
+//       );
+//     }
+//
+//     return Scaffold(
+//       body: Stack(
+//         children: [
+//           Container(
+//             decoration: const BoxDecoration(
+//               image: DecorationImage(
+//                 image: AssetImage('assets/purple_background.png'),
+//                 fit: BoxFit.cover,
+//               ),
+//             ),
+//           ),
+//           Column(
+//             children: [
+//               // Add extra spacing to avoid front camera
+//               const SizedBox(height: 60),
+//
+//               // Header with close button
+//               Padding(
+//                 padding: const EdgeInsets.all(16.0),
+//                 child: Row(
+//                   children: [
+//                     IconButton(
+//                       icon: const Icon(Icons.close, color: Colors.black),
+//                       onPressed: () => Navigator.of(context).pop(),
+//                     ),
+//                     const Expanded(
+//                       child: Text(
+//                         'Makeup Artist Details',
+//                         textAlign: TextAlign.center,
+//                         style: TextStyle(
+//                           fontSize: 20,
+//                           fontWeight: FontWeight.w600,
+//                           color: Colors.black,
+//                         ),
+//                       ),
+//                     ),
+//                     const SizedBox(width: 48), // Balance the close button
+//                   ],
+//                 ),
+//               ),
+//
+//               Expanded(
+//                 child: SingleChildScrollView(
+//                   padding: const EdgeInsets.symmetric(horizontal: 20),
+//                   child: Column(
+//                     crossAxisAlignment: CrossAxisAlignment.start,
+//                     children: [
+//                       // Makeup Artist Info Section
+//                       Container(
+//                         padding: const EdgeInsets.all(20),
+//                         decoration: BoxDecoration(
+//                           color: Colors.transparent,
+//                           borderRadius: BorderRadius.circular(16),
+//                           border: Border.all(
+//                             color: Colors.transparent,
+//                           ),
+//                         ),
+//                         child: Row(
+//                           children: [
+//                             // Profile Picture
+//                             Container(
+//                               width: 60,
+//                               height: 60,
+//                               decoration: BoxDecoration(
+//                                 shape: BoxShape.circle,
+//                                 color: const Color(0xFFFFB347),
+//                               ),
+//                               child: ClipOval(
+//                                 child: profilePictureUrl != null && profilePictureUrl!.isNotEmpty
+//                                     ? Image.network(
+//                                   profilePictureUrl!,
+//                                   fit: BoxFit.cover,
+//                                   errorBuilder: (context, error, stackTrace) {
+//                                     return const Icon(
+//                                       Icons.person,
+//                                       size: 30,
+//                                       color: Colors.white,
+//                                     );
+//                                   },
+//                                 )
+//                                     : const Icon(
+//                                   Icons.person,
+//                                   size: 30,
+//                                   color: Colors.white,
+//                                 ),
+//                               ),
+//                             ),
+//                             const SizedBox(width: 16),
+//
+//                             // Makeup Artist Details
+//                             Expanded(
+//                               child: Column(
+//                                 crossAxisAlignment: CrossAxisAlignment.start,
+//                                 children: [
+//                                   Text(
+//                                     makeupArtistData!['studio_name'] ?? 'Unknown Artist',
+//                                     style: const TextStyle(
+//                                       fontSize: 18,
+//                                       fontWeight: FontWeight.w600,
+//                                       color: Colors.black,
+//                                     ),
+//                                   ),
+//                                   const SizedBox(height: 4),
+//                                   Row(
+//                                     children: [
+//                                       const Icon(
+//                                         Icons.phone,
+//                                         size: 16,
+//                                         color: Colors.deepPurpleAccent,
+//                                       ),
+//                                       const SizedBox(width: 4),
+//                                       Text(
+//                                         ('0${makeupArtistData!['phone_number'].toString()}') ?? 'No phone',
+//                                         style: const TextStyle(
+//                                           fontSize: 14,
+//                                           color: Colors.black87,
+//                                         ),
+//                                       ),
+//                                     ],
+//                                   ),
+//                                   const SizedBox(height: 4),
+//                                   Row(
+//                                     children: [
+//                                       const Icon(
+//                                         Icons.email,
+//                                         size: 16,
+//                                         color: Colors.deepPurpleAccent,
+//                                       ),
+//                                       const SizedBox(width: 4),
+//                                       Expanded(
+//                                         child: Text(
+//                                           makeupArtistData!['email'] ?? 'No email',
+//                                           style: const TextStyle(
+//                                             fontSize: 14,
+//                                             color: Colors.black87,
+//                                           ),
+//                                           overflow: TextOverflow.ellipsis,
+//                                         ),
+//                                       ),
+//                                     ],
+//                                   ),
+//                                   const SizedBox(height: 4),
+//                                   Row(
+//                                     children: [
+//                                       Icon(
+//                                         Icons.circle,
+//                                         size: 12,
+//                                         color: _getStatusColor(),
+//                                       ),
+//                                       const SizedBox(width: 4),
+//                                       Text(
+//                                         _getStatus(),
+//                                         style: TextStyle(
+//                                           fontSize: 14,
+//                                           color: _getStatusColor(),
+//                                           fontWeight: FontWeight.w500,
+//                                         ),
+//                                       ),
+//                                     ],
+//                                   ),
+//                                 ],
+//                               ),
+//                             ),
+//                           ],
+//                         ),
+//                       ),
+//
+//                       const SizedBox(height: 24),
+//                       _buildPersonalInfoSection(),
+//                       const SizedBox(height: 24),
+//
+//                       // Makeup Artist Details Section
+//                       Container(
+//                         padding: const EdgeInsets.all(20),
+//                         decoration: BoxDecoration(
+//                           color: const Color(0xFFF3E5F5),
+//                           borderRadius: BorderRadius.circular(16),
+//                         ),
+//                         child: Column(
+//                           children: [
+//                             Column(
+//                               crossAxisAlignment: CrossAxisAlignment.start,
+//                               children: [
+//                                 const Text(
+//                                   'Studio Information',
+//                                   style: TextStyle(
+//                                     fontSize: 18,
+//                                     fontWeight: FontWeight.w600,
+//                                     color: Colors.black,
+//                                   ),
+//                                 ),
+//                                 const SizedBox(height: 16),
+//                                 Row(
+//                                   crossAxisAlignment: CrossAxisAlignment.start,
+//                                   children: [
+//                                     const SizedBox(
+//                                       width: 150,
+//                                       child: Text(
+//                                         'Services & Pricing',
+//                                         style: TextStyle(
+//                                           fontSize: 14,
+//                                           fontWeight: FontWeight.w500,
+//                                           color: Colors.black87,
+//                                         ),
+//                                       ),
+//                                     ),
+//                                     Expanded(
+//                                       child: _buildCategoryPriceSection(),
+//                                     ),
+//                                   ],
+//                                 ),
+//                                 const SizedBox(height: 16),
+//                               ],
+//                             ),
+//                             _buildDetailRow('Address', makeupArtistData!['address'] ?? 'Address not available'),
+//                             _buildDetailRow('Working Days', _getWorkingDays()),
+//                             _buildDetailRow('Working Hours', _getWorkingHours()),
+//                             _buildDetailRow('About', makeupArtistData!['about'] ?? 'About not available', isLast: true),
+//                           ],
+//                         ),
+//                       ),
+//                       // Portfolio Section
+//                       Container(
+//                         padding: const EdgeInsets.all(20),
+//                         decoration: BoxDecoration(
+//                           borderRadius: BorderRadius.circular(16),
+//                         ),
+//                         child: _buildPortfolioSection(),
+//                       ),
+//
+//                       const SizedBox(height: 24),
+//
+//                       // Action Buttons - Show based on status
+//                       if (_shouldShowActionButtons())
+//                         Column(
+//                           children: [
+//                             if (_getStatus().toLowerCase() == 'pending')
+//                               Row(
+//                                 children: [
+//                                   Expanded(
+//                                     child: ElevatedButton(
+//                                       onPressed: isProcessing ? null : () => _showConfirmationDialog(
+//                                         action: 'Approve',
+//                                         studioName: makeupArtistData!['studio_name'] ?? 'this makeup artist',
+//                                         onConfirm: () => _updateMakeupArtistStatus('Approved'),
+//                                       ),
+//                                       style: ElevatedButton.styleFrom(
+//                                         backgroundColor: Colors.green,
+//                                         foregroundColor: Colors.white,
+//                                         padding: const EdgeInsets.symmetric(vertical: 16),
+//                                         shape: RoundedRectangleBorder(
+//                                           borderRadius: BorderRadius.circular(12),
+//                                         ),
+//                                       ),
+//                                       child:
+//                                       const Text(
+//                                         'Approve',
+//                                         style: TextStyle(
+//                                           fontSize: 16,
+//                                           fontWeight: FontWeight.w600,
+//                                         ),
+//                                       ),
+//                                     ),
+//                                   ),
+//                                   const SizedBox(width: 16),
+//                                   Expanded(
+//                                     child: ElevatedButton(
+//                                       onPressed: isProcessing ? null : () => _showConfirmationDialog(
+//                                         action: 'Reject',
+//                                         studioName: makeupArtistData!['studio_name'] ?? 'this makeup artist',
+//                                         onConfirm: () => _updateMakeupArtistStatus('Rejected'),
+//                                       ),
+//                                       style: ElevatedButton.styleFrom(
+//                                         backgroundColor: Colors.red,
+//                                         foregroundColor: Colors.white,
+//                                         padding: const EdgeInsets.symmetric(vertical: 16),
+//                                         shape: RoundedRectangleBorder(
+//                                           borderRadius: BorderRadius.circular(12),
+//                                         ),
+//                                       ),
+//                                       child: const Text(
+//                                         'Reject',
+//                                         style: TextStyle(
+//                                           fontSize: 16,
+//                                           fontWeight: FontWeight.w600,
+//                                         ),
+//                                       ),
+//                                     ),
+//                                   ),
+//                                 ],
+//                               )
+//                             else if (_getStatus().toLowerCase() == 'approved' || _getStatus().toLowerCase() == 'accepted')
+//                               Container(
+//                                 width: double.infinity,
+//                                 child: ElevatedButton(
+//                                   onPressed: isProcessing ? null : () => _showConfirmationDialog(
+//                                     action: 'Disable',
+//                                     studioName: makeupArtistData!['studio_name'] ?? 'this makeup artist',
+//                                     onConfirm: () => _updateMakeupArtistStatus('Disabled'),
+//                                   ),
+//                                   style: ElevatedButton.styleFrom(
+//                                     backgroundColor: Colors.orange,
+//                                     foregroundColor: Colors.white,
+//                                     padding: const EdgeInsets.symmetric(vertical: 16),
+//                                     shape: RoundedRectangleBorder(
+//                                       borderRadius: BorderRadius.circular(12),
+//                                     ),
+//                                   ),
+//                                   child: const Text(
+//                                     'Disable Account',
+//                                     style: TextStyle(
+//                                       fontSize: 16,
+//                                       fontWeight: FontWeight.w600,
+//                                     ),
+//                                   ),
+//                                 ),
+//                               ),
+//                             const SizedBox(height: 24),
+//                           ],
+//                         )
+//                       else
+//                         Column(
+//                           children: [
+//                             Container(
+//                               width: double.infinity,
+//                               padding: const EdgeInsets.symmetric(vertical: 16),
+//                               decoration: BoxDecoration(
+//                                 color: Colors.grey[300],
+//                                 borderRadius: BorderRadius.circular(12),
+//                               ),
+//                               child: Text(
+//                                 _getStatus() == 'Accepted' || _getStatus() == 'Approved' ? 'Application Approved' :
+//                                 _getStatus() == 'Rejected' ? 'Application Rejected' :
+//                                 'Application ${_getStatus()}',
+//                                 textAlign: TextAlign.center,
+//                                 style: TextStyle(
+//                                   fontSize: 16,
+//                                   fontWeight: FontWeight.w600,
+//                                   color: Colors.grey[600],
+//                                 ),
+//                               ),
+//                             ),
+//                             const SizedBox(height: 24),
+//                           ],
+//                         ),
+//                     ],
+//                   ),
+//                 ),
+//               ),
+//             ],
+//           ),
+//           if (isProcessing) _buildLoading(),
+//         ],
+//       ),
+//     );
+//   }
+//
+//   Widget _buildDetailRow(String label, String value, {bool isLast = false}) {
+//     return Column(
+//       children: [
+//         Row(
+//           crossAxisAlignment: CrossAxisAlignment.start,
+//           children: [
+//             SizedBox(
+//               width: 150,
+//               child: Text(
+//                 label,
+//                 style: const TextStyle(
+//                   fontSize: 14,
+//                   fontWeight: FontWeight.w500,
+//                   color: Colors.black87,
+//                 ),
+//               ),
+//             ),
+//             Expanded(
+//               child: Text(
+//                 value,
+//                 style: const TextStyle(
+//                   fontSize: 14,
+//                   color: Colors.black87,
+//                 ),
+//               ),
+//             ),
+//           ],
+//         ),
+//         if (!isLast) const SizedBox(height: 16),
+//       ],
+//     );
+//   }
+// }
