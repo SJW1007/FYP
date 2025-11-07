@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../service/NotificationService.dart';
 import 'WriteReview.dart';
 import 'ViewReview.dart';
+import 'package:flutter/services.dart';
 
 class HistoryDetailsPage extends StatefulWidget {
   final String appointmentId;
@@ -27,6 +29,39 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
       _bookingFuture = fetchBookingDetails();
     });
   }
+
+  String getPriceForCategory(dynamic priceData, String category) {
+    if (priceData == null) return 'Price not available';
+
+    // If priceData is already a string (for backward compatibility)
+    if (priceData is String) {
+      return priceData;
+    }
+
+    // If priceData is a Map
+    if (priceData is Map<String, dynamic>) {
+      // Try to get the exact category match first
+      if (priceData.containsKey(category)) {
+        return priceData[category].toString();
+      }
+
+      // If exact match not found, try case-insensitive search
+      for (String key in priceData.keys) {
+        if (key.toLowerCase() == category.toLowerCase()) {
+          return priceData[key].toString();
+        }
+      }
+
+      // If category not found, return first available price with category name
+      if (priceData.isNotEmpty) {
+        String firstKey = priceData.keys.first;
+        return '${priceData[firstKey]} (${firstKey})';
+      }
+    }
+
+    return 'Price not available';
+  }
+
   Future<Map<String, dynamic>?> fetchBookingDetails() async {
     print("Fetching booking details for: ${widget.appointmentId}");
 
@@ -44,19 +79,25 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
     print("Appointment Data: $data");
 
     final dateStr = data['date'] ?? '';
-    String timeStr = data['time'] ?? '';
-    print("Raw Date: $dateStr, Raw Time: $timeStr");
+    String timeRangeStr = data['time_range'] ?? data['time'] ?? ''; // Support both fields
+
+    // Extract start time for DateTime parsing
+    String timeStr = timeRangeStr.split('-')[0].trim();
+    timeStr = timeStr.replaceAll(RegExp(r'\s+'), ' ').trim();
 
     final dateFormat = DateFormat('yyyy-MM-dd h:mm a');
-    timeStr = timeStr.replaceAll(' ', ' ').replaceAll(' ', ' ').trim();
+    final dateFormatNoMinutes = DateFormat('yyyy-MM-dd h a');
 
     DateTime bookingDateTime;
     try {
       bookingDateTime = dateFormat.parse('$dateStr $timeStr');
-      print("Parsed Booking DateTime: $bookingDateTime");
     } catch (e) {
-      print("Failed to parse booking datetime: $e");
-      return null;
+      try {
+        bookingDateTime = dateFormatNoMinutes.parse('$dateStr $timeStr');
+      } catch (e2) {
+        print("Failed to parse booking datetime: $e2");
+        return null;
+      }
     }
 
     final artistRef = data['artist_id'];
@@ -90,7 +131,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
     print("Artist Data: $artistData");
 
     final address = artistData['address'] ?? '';
-    final price = artistData['price'] ?? '';
+    final price = artistData['price'] ;
     final userRef = artistData['user_id'];
 
     print("Artist Address: $address, Price Range: $price");
@@ -125,24 +166,27 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
 
     final avatarUrl = userData['profile pictures'];
     final name = artistData['studio_name'] ?? '';
-    final phone = artistData['phone_number'] ?? '';
+    final phone = artistData['phone_number'].toString() ?? '';
     final email = artistData['email'] ?? '';
     final now = DateTime.now();
+    final nowDateOnly = DateTime(now.year, now.month, now.day);
+    final appointmentDateOnly = DateTime(bookingDateTime.year, bookingDateTime.month, bookingDateTime.day);
     final isPast = status == 'Completed' && bookingDateTime.isBefore(now);
-    final daysDifference = bookingDateTime.difference(now).inDays;
-    final canCancel = daysDifference > 3;
+    final daysDifference = appointmentDateOnly.difference(nowDateOnly).inDays;
+    final canCancel = daysDifference >= 3;
+    final specificPrice = getPriceForCategory(price, category);
 
     print("Artist Name: $name, Phone: $phone, Email: $email, Avatar: $avatarUrl");
 
     return {
       'category': category,
       'date': dateStr,
-      'time': timeStr,
+      'time': timeRangeStr,
       'remarks': remarks,
       'status': status,
       'preferred_makeup': preferredMakeup,
       'address': address,
-      'price': price,
+      'price': specificPrice,
       'artist_name': name,
       'artist_phone': phone,
       'artist_email': email,
@@ -155,7 +199,144 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
 
   }
 
+  void _showImageDialog(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            child: Stack(
+              children: [
+                // Backdrop - tap to close
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    color: Colors.black87,
+                  ),
+                ),
 
+                // Image container
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.all(20),
+                    child: InteractiveViewer(
+                      minScale: 0.5,
+                      maxScale: 4.0,
+                      child: Image.network(
+                        imageUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            padding: const EdgeInsets.all(40),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.error, size: 48, color: Colors.red),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Failed to load image',
+                                  style: TextStyle(color: Colors.red, fontSize: 16),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            padding: const EdgeInsets.all(40),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                value: loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Close button
+                Positioned(
+                  top: 40,
+                  right: 20,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => Navigator.pop(context),
+                      borderRadius: BorderRadius.circular(25),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(25),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.3), width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              spreadRadius: 1,
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Bottom instruction text
+                Positioned(
+                  bottom: 60,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Tap outside or X to close • Pinch to zoom',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -221,7 +402,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                                   const SizedBox(width: 4),
                                   Expanded(
                                     child: Text(
-                                      booking['artist_phone'],
+                                      '0${booking['artist_phone']}',
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
@@ -246,6 +427,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                       ],
                     ),
                     const SizedBox(height: 20),
+                    buildBookingIdSection(widget.appointmentId),
                     const Divider(),
                     bookingInfoRow(Icons.style, "Category", booking['category']),
                     bookingInfoRow(Icons.location_on, "Address", booking['address']),
@@ -314,11 +496,16 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                           const SizedBox(height: 8),
                           if (booking['preferred_makeup'] != null)
                             Center(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: Image.network(
-                                  booking['preferred_makeup'],
-                                  height: 200,
+                              child: GestureDetector(
+                                onTap: () => _showImageDialog(
+                                    context,
+                                    booking['preferred_makeup']
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Image.network(
+                                    booking['preferred_makeup'],
+                                    height: 200,
                                   errorBuilder: (context, error, stackTrace) {
                                     print('Image load error: $error');
                                     return Container(
@@ -357,7 +544,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                                 ),
                               ),
                             )
-                          else
+                            )else
                             Container(
                               height: 200,
                               decoration: BoxDecoration(
@@ -375,6 +562,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                       ),
                     ),
                   const SizedBox(height: 24),
+
                     // Cancel button with 3-day restriction
                     if (booking['status'] != 'Cancelled' &&
                         booking['status'] != 'Completed' &&
@@ -400,22 +588,68 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                                           Navigator.pop(dialogContext);
 
                                           try {
+                                            // Get appointment data first to extract artist info
+                                            final appointmentDoc = await FirebaseFirestore.instance
+                                                .collection('appointments')
+                                                .doc(widget.appointmentId)
+                                                .get();
+
+                                            if (!appointmentDoc.exists) {
+                                              throw Exception("Appointment not found");
+                                            }
+
+                                            final appointmentData = appointmentDoc.data()!;
+                                            final artistRef = appointmentData['artist_id'] as DocumentReference?;
+                                            final customerRef = appointmentData['customerId'] as DocumentReference?;
+
+                                            if (artistRef == null || customerRef == null) {
+                                              throw Exception("Invalid appointment data");
+                                            }
+
+                                            // Get artist document to get user_id
+                                            final artistDoc = await artistRef.get();
+                                            if (!artistDoc.exists) {
+                                              throw Exception("Artist not found");
+                                            }
+
+                                            final artistData = artistDoc.data() as Map<String, dynamic>?;
+                                            final artistUserRef = artistData?['user_id'] as DocumentReference?;
+
+                                            if (artistUserRef == null) {
+                                              throw Exception("Artist user reference not found");
+                                            }
+
+                                            // Update appointment status to Cancelled
                                             await FirebaseFirestore.instance
                                                 .collection('appointments')
                                                 .doc(widget.appointmentId)
                                                 .update({'status': 'Cancelled'});
 
+                                            // Create notification for the makeup artist
+                                            await NotificationService.createCancellationNotification(
+                                              artistUserId: artistUserRef.id,
+                                              appointmentId: widget.appointmentId,
+                                              customerId: customerRef.id,
+                                            );
+
                                             _refreshBookingDetails();
 
                                             if (context.mounted) {
                                               ScaffoldMessenger.of(context).showSnackBar(
-                                                const SnackBar(content: Text("Booking cancelled successfully.")),
+                                                const SnackBar(
+                                                  content: Text("Booking cancelled successfully. Artist has been notified."),
+                                                  backgroundColor: Colors.green,
+                                                ),
                                               );
                                             }
                                           } catch (e) {
+                                            print("Error cancelling booking: $e");
                                             if (context.mounted) {
                                               ScaffoldMessenger.of(context).showSnackBar(
-                                                SnackBar(content: Text("Failed to cancel booking: $e")),
+                                                SnackBar(
+                                                  content: Text("Failed to cancel booking: $e"),
+                                                  backgroundColor: Colors.red,
+                                                ),
                                               );
                                             }
                                           }
@@ -439,7 +673,7 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                             Padding(
                               padding: const EdgeInsets.only(top: 8.0),
                               child: Text(
-                                "Cancellation is only allowed more than 3 days before the appointment date.",
+                                "Cancellation is only allowed at least 3 days before the appointment date.",
                                 style: TextStyle(
                                   color: Colors.red[600],
                                   fontSize: 12,
@@ -450,10 +684,172 @@ class _HistoryDetailsPageState extends State<HistoryDetailsPage> {
                             ),
                         ],
                       ),
+                    // Review buttons
+                    if (booking['status'] == 'Completed')
+                      Column(
+                        children: [
+                          if (!booking['reviewExists'])
+                          // Write Review Button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () async {
+                                  final result = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => WriteReviewPage(
+                                        appointmentId: widget.appointmentId,
+                                      ),
+                                    ),
+                                  );
+
+                                  // Refresh the page if review was written
+                                  if (result == true) {
+                                    _refreshBookingDetails();
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF923DC3),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                                child: const Text("Write Review", style: TextStyle(color: Colors.white)),
+                              ),
+                            )
+                          else
+                          // View Review Button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () async {
+                                  final result = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => ViewReviewPage(
+                                        appointmentId: widget.appointmentId,
+                                      ),
+                                    ),
+                                  );
+
+                                  // Refresh the page if review was deleted
+                                  if (result == 'deleted') {
+                                    _refreshBookingDetails();
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF923DC3),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                                child: const Text("View Review", style: TextStyle(color: Colors.white)),
+                              ),
+                            ),
+                        ],
+                      ),
                   ],
                 ),
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildBookingIdSection(String appointmentId) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFB81EE), width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFB81EE).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.receipt_long,
+                  color: Color(0xFFFB81EE),
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Text(
+                'Booking ID',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SelectableText(
+                    appointmentId,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontFamily: 'monospace',
+                      color: Color(0xFF925F70),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 20),
+                  color: const Color(0xFFFB81EE),
+                  onPressed: () {
+                    // Copy to clipboard
+                    final data = ClipboardData(text: appointmentId);
+                    Clipboard.setData(data);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Booking ID copied to clipboard'),
+                        duration: Duration(seconds: 2),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
+                  tooltip: 'Copy Booking ID',
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Keep this ID for your records and reference',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey,
+              fontStyle: FontStyle.italic,
+            ),
           ),
         ],
       ),

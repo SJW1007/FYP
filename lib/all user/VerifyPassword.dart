@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'UpdatePassword.dart';
@@ -13,9 +14,53 @@ class _VerifyPasswordPageState extends State<VerifyPasswordPage> {
   final TextEditingController _passwordController = TextEditingController();
   final FirebaseAuth _auth = FirebaseAuth.instance;
   bool _isPasswordVisible = false;
-
+  String? userRole;
   bool _isLoading = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserRole();
+  }
+  Future<void> _fetchUserRole() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (userDoc.exists) {
+          setState(() {
+            userRole = userDoc.data()?['role'] as String?;
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      print('Error fetching user role: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  String _getBackgroundImage() {
+    if (userRole == 'makeup artist' || userRole == 'admin') {
+      return 'assets/purple_background.png';
+    }
+    return 'assets/image_4.png';
+  }
 
   Future<void> _verifyCurrentPassword() async {
     setState(() {
@@ -57,7 +102,9 @@ class _VerifyPasswordPageState extends State<VerifyPasswordPage> {
         fit: StackFit.expand,
         children: [
           Image.asset(
-            'assets/image_4.png',
+            _getBackgroundImage(),
+            width: double.infinity,
+            height: double.infinity,
             fit: BoxFit.cover,
           ),
           SafeArea(
@@ -212,16 +259,7 @@ class _VerifyPasswordPageState extends State<VerifyPasswordPage> {
                               elevation: 3,
                               shadowColor: Colors.purple.withOpacity(0.3),
                             ),
-                            child: _isLoading
-                                ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            )
-                                : const Text(
+                            child: const Text(
                               "Next",
                               style: TextStyle(
                                 fontFamily: 'Georgia',
@@ -239,6 +277,64 @@ class _VerifyPasswordPageState extends State<VerifyPasswordPage> {
               ],
             ),
           ),
+          // Loading overlay - inline instead of separate method
+          if (_isLoading)
+            Container(
+              color: Colors.black54,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFDA9BF5)),
+                        strokeWidth: 3,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Processing...',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Please wait',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Animated dots
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: List.generate(3, (index) {
+                          return AnimatedContainer(
+                            duration: Duration(milliseconds: 600 + (index * 200)),
+                            curve: Curves.easeInOut,
+                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                            height: 8,
+                            width: 8,
+                            decoration: BoxDecoration(
+                              color: Color(0xFFDA9BF5).withOpacity(0.7),
+                              shape: BoxShape.circle,
+                            ),
+                          );
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

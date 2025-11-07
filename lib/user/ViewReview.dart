@@ -1,7 +1,11 @@
+import 'dart:io';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:intl/intl.dart'; // Add this import for date formatting
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+import 'EditReview.dart';
 
 class ViewReviewPage extends StatefulWidget {
   final String appointmentId;
@@ -15,6 +19,9 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
   Map<String, dynamic>? _review;
   bool _isLoading = true;
   String? _loadingError;
+  String? _reviewId;
+  bool _canEdit = false;
+  bool _isDeleting = false;
 
   @override
   void initState() {
@@ -47,9 +54,17 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
       }
       final reviewDoc = reviewsQuery.docs.first;
       final reviewData = reviewDoc.data();
+      _reviewId = reviewDoc.id;
+
       final customerRef = reviewData['customer_id'] as DocumentReference?;
       String customerName = '';
       String customerImage = '';
+
+      // Check if current user can edit this review
+      final currentUser = FirebaseAuth.instance.currentUser;
+      _canEdit = currentUser != null && customerRef != null &&
+          customerRef.id == currentUser.uid;
+
       if (customerRef != null) {
         final customerDoc = await customerRef.get();
         if (customerDoc.exists) {
@@ -58,6 +73,12 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
           customerImage = customerData?['profile pictures'] ?? '';
         }
       }
+      // Add this after loading the basic review data
+      List<String> reviewImages = [];
+      if (reviewData['images'] != null) {
+        reviewImages = List<String>.from(reviewData['images']);
+      }
+
       final review = {
         'id': reviewDoc.id,
         'customer_name': customerName,
@@ -67,6 +88,7 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
         'timestamp': reviewData['timestamp'] as Timestamp?,
         'likes_count': reviewData['likes_count'] ?? 0,
         'comments_count': reviewData['comments_count'] ?? 0,
+        'images': reviewImages, // Add this line
       };
       if (mounted) {
         setState(() {
@@ -164,14 +186,34 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
     );
   }
 
+  Future<void> _navigateToEditReview() async {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditReviewPage(
+          reviewId: _reviewId!,
+          reviewData: _review!,
+        ),
+      ),
+    ).then((updated) {
+      if (updated == true) {
+        _loadReview();
+      }
+    });
+  }
+
   Widget _buildReviewCard(Map<String, dynamic> review) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.9),
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header with profile, name, and timestamp
+          // First row: Profile picture, name, datetime, and action buttons
           Row(
             children: [
               _buildProfileImage(review['customer_image']),
@@ -189,25 +231,37 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        _buildStarRating(review['rating']),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            _formatTimestamp(review['timestamp']),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ),
-                      ],
+                    Text(
+                      _formatTimestamp(review['timestamp']),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.black54,
+                      ),
                     ),
                   ],
                 ),
               ),
+              // Action buttons - only show if user can edit
+              if (_canEdit) ...[
+                IconButton(
+                  onPressed: _isDeleting ? null : _navigateToEditReview,
+                  icon: const Icon(
+                    Icons.edit,
+                    color: Color(0xFFE91E63),
+                    size: 20,
+                  ),
+                  tooltip: 'Edit Review',
+                ),
+              ],
             ],
+          ),
+
+          const SizedBox(height: 8),
+
+          //  Stars rating
+          Padding(
+            padding: const EdgeInsets.only(left:0),
+            child: _buildStarRating(review['rating']),
           ),
 
           const SizedBox(height: 12),
@@ -221,9 +275,33 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
               height: 1.4,
             ),
           ),
-
-          const SizedBox(height: 16),
-
+          if (review['images'] != null && review['images'].isNotEmpty) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 80,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: review['images'].length,
+                itemBuilder: (context, index) {
+                  return Container(
+                    margin: EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () => _showImageDialog(context, review['images'][index]),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          review['images'][index],
+                          width: 80,
+                          height: 80,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -320,6 +398,144 @@ class _ViewReviewPageState extends State<ViewReviewPage> {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: _buildReviewCard(_review!),
+    );
+  }
+  void _showImageDialog(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.zero,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            child: Stack(
+              children: [
+                // Backdrop - tap to close
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    color: Colors.black87,
+                  ),
+                ),
+
+                // Image container
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.all(20),
+                    child: InteractiveViewer(
+                      minScale: 0.5,
+                      maxScale: 4.0,
+                      child: Image.network(
+                        imageUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            padding: const EdgeInsets.all(40),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.error, size: 48, color: Colors.red),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Failed to load image',
+                                  style: TextStyle(color: Colors.red, fontSize: 16),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            padding: const EdgeInsets.all(40),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                value: loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Close button
+                Positioned(
+                  top: 40,
+                  right: 20,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => Navigator.pop(context),
+                      borderRadius: BorderRadius.circular(25),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(25),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.3), width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              spreadRadius: 1,
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Bottom instruction text
+                Positioned(
+                  bottom: 60,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Tap outside or X to close • Pinch to zoom',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

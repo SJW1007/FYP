@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'dart:io';
 
 class WriteReviewPage extends StatefulWidget {
   final String appointmentId;
@@ -15,10 +18,18 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
   final TextEditingController _reviewController = TextEditingController();
   bool _isSubmitting = false;
 
+  // Image handling
+  final List<File> _selectedImages = [];
+  final ImagePicker _picker = ImagePicker();
+  static const int maxImages = 6;
+
   // Cache the artist details to prevent refetching
   Map<String, dynamic>? _cachedArtistDetails;
   bool _isLoadingArtist = true;
   String? _loadingError;
+  List<XFile> _newImageFiles = [];
+  bool _isPickingImages = false;
+
 
   @override
   void initState() {
@@ -44,6 +55,289 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
         });
       }
     }
+  }
+
+  // Image picker methods
+  Future<void> _pickImages() async {
+    if (_isPickingImages) return;
+
+    setState(() {
+      _isPickingImages = true;
+    });
+
+    try {
+      final List<XFile>? pickedFiles = await _picker.pickMultiImage(
+        imageQuality: 80,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+
+      if (pickedFiles != null && pickedFiles.isNotEmpty) {
+        // Calculate how many images we can still add
+        int currentImageCount = _selectedImages.length + _newImageFiles.length;
+        int availableSlots = 6 - currentImageCount;
+
+        if (availableSlots <= 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Maximum 6 images reached'),
+              duration: Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          return;
+        }
+
+        // Take only the first N images that fit within the limit
+        List<XFile> imagesToAdd;
+        if (pickedFiles.length <= availableSlots) {
+          imagesToAdd = pickedFiles;
+        } else {
+          imagesToAdd = pickedFiles.take(availableSlots).toList();
+          // Show message only when user selects more than available slots
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Only the first $availableSlots images were selected (maximum 6 images allowed)'),
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+
+        setState(() {
+          _newImageFiles.addAll(imagesToAdd);
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error picking images: ${e.toString()}'),
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      setState(() {
+        _isPickingImages = false;
+      });
+    }
+  }
+
+  Future<void> _takePhoto() async {
+    if (_isPickingImages) return;
+
+    // Check if we already have 6 images
+    int totalImages = _selectedImages.length + _newImageFiles.length;
+    if (totalImages >= 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Maximum 6 images reached'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isPickingImages = true;
+    });
+
+    try {
+      final XFile? pickedFile = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 80,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+
+      if (pickedFile != null) {
+        setState(() {
+          _newImageFiles.add(pickedFile);
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error taking photo: ${e.toString()}'),
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      setState(() {
+        _isPickingImages = false;
+      });
+    }
+  }
+
+  void _removeImage(int index) {
+    setState(() {
+      _selectedImages.removeAt(index);
+    });
+  }
+
+  void _showImageOption() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Select Photo',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _takePhoto();
+                        },
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFDA9BF5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Camera'),
+                    ],
+                  ),
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _pickImages();
+                        },
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFDA9BF5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.photo_library,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Gallery'),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<List<String>> _uploadImages() async {
+    if (_newImageFiles.isEmpty) {
+      print('No images selected for upload');
+      return [];
+    }
+
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      print('User not authenticated');
+      throw Exception("User not authenticated");
+    }
+
+    List<String> imageUrls = [];
+
+    try {
+      for (int i = 0; i < _newImageFiles.length; i++) {
+        final file = File(_newImageFiles[i].path);
+
+        // Debug file info
+        print('--- Uploading Image $i ---');
+        print('File path: ${file.path}');
+        print('File exists: ${await file.exists()}');
+        if (await file.exists()) {
+          print('File size: ${(await file.length()) / 1024} KB');
+        }
+
+        final fileName = 'review_${widget.appointmentId}_${currentUser.uid}_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
+        print('Generated filename: $fileName');
+
+        try {
+          final storageRef = FirebaseStorage.instance.ref().child('review_images/$fileName');
+          print('Storage path: ${storageRef.fullPath}');
+
+          // Start upload
+          print('Starting upload...');
+          final uploadTask = storageRef.putFile(file);
+
+          // Monitor progress
+          uploadTask.snapshotEvents.listen((taskSnapshot) {
+            print('Upload progress: ${(taskSnapshot.bytesTransferred / taskSnapshot.totalBytes) * 100}%');
+          });
+
+          // Wait for completion
+          final taskSnapshot = await uploadTask;
+          print('Upload complete!');
+
+          // Get URL
+          final downloadUrl = await taskSnapshot.ref.getDownloadURL();
+          print('Download URL: $downloadUrl');
+          imageUrls.add(downloadUrl);
+
+        } catch (e) {
+          print('❌ Error uploading image $i: $e');
+          print('Stack trace: ${e is Error ? e.stackTrace : ''}');
+          // Continue with other images
+        }
+      }
+    } catch (e) {
+      print('❌ Global upload error: $e');
+      rethrow;
+    }
+
+    return imageUrls;
+  }
+
+  void _removeNewImage(int index) {
+    setState(() {
+      _newImageFiles.removeAt(index);
+    });
   }
 
   Future<Map<String, dynamic>?> fetchArtistDetails(String appointmentId) async {
@@ -113,17 +407,52 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
           .where('artist_id', isEqualTo: artistRef)
           .get();
 
-      // 7. Combine all the data
+      // 7. Handle profile_picture field - check if it's a List or String
+      String profilePicture = '';
+      final profilePictureData = userData['profile pictures'];
+
+      if (profilePictureData != null) {
+        if (profilePictureData is List && profilePictureData.isNotEmpty) {
+          // If it's a list, take the first image
+          profilePicture = profilePictureData.first?.toString() ?? '';
+        } else if (profilePictureData is String) {
+          // If it's already a string
+          profilePicture = profilePictureData;
+        }
+      }
+
+      // 8. Handle category field - check if it's a List or String
+      String category = 'Unknown Category';
+      final categoryData = artistData['category'];
+
+      if (categoryData != null) {
+        if (categoryData is List && categoryData.isNotEmpty) {
+          // If it's a list, join all categories with commas or take the first one
+          category = categoryData.map((cat) => cat.toString()).join(', ');
+          // Or if you prefer just the first category:
+          // category = categoryData.first?.toString() ?? 'Unknown Category';
+        } else if (categoryData is String) {
+          // If it's already a string
+          category = categoryData;
+        }
+      }
+
+      // 9. Combine all the data
       return {
         'name': (artistData['studio_name'] as String?) ?? 'Unknown Artist',
-        'profile_picture': (userData['profile pictures'] as String?) ?? '',
-        'category': (artistData['category'] as String?) ?? 'Unknown Category',
+        'profile_picture': profilePicture,
+        'category': category,
         'reviews_count': reviewsQuery.docs.length,
         'artist_ref': artistRef, // Keep the reference for saving review
         'artist_doc_id': artistDoc.id,
       };
     } catch (e) {
       print('Error fetching artist details: $e');
+      // Print more detailed error information for debugging
+      print('Error type: ${e.runtimeType}');
+      if (e is TypeError) {
+        print('TypeError details: ${e.toString()}');
+      }
       return null;
     }
   }
@@ -135,13 +464,11 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
       );
       return;
     }
-    if (_reviewController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please write a review")),
-      );
-      return;
-    }
-    // Get current user
+
+    // Remove the empty text check so it's optional
+    // The review text can still be saved as empty
+    final reviewText = _reviewController.text.trim();
+
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -149,11 +476,12 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
       );
       return;
     }
+
     setState(() {
       _isSubmitting = true;
     });
+
     try {
-      // Use cached artist details instead of fetching again
       if (_cachedArtistDetails == null || _cachedArtistDetails!['artist_ref'] == null) {
         throw Exception("Could not find artist details");
       }
@@ -162,32 +490,39 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
       final currentUserRef = FirebaseFirestore.instance.doc('users/${currentUser.uid}');
       final appointmentRef = FirebaseFirestore.instance.doc('appointments/${widget.appointmentId}');
 
-      // Add review to reviews collection (including appointment_id)
+      List<String> imageUrls = [];
+      if (_newImageFiles.isNotEmpty) {
+        imageUrls = await _uploadImages();
+      }
+
       await FirebaseFirestore.instance.collection('reviews').add({
         'artist_id': artistRef,
         'customer_id': currentUserRef,
         'appointment_id': appointmentRef,
         'rating': _rating,
-        'review_text': _reviewController.text.trim(),
+        'review_text': reviewText,
+        'images': imageUrls,
         'timestamp': FieldValue.serverTimestamp(),
       });
-      // Update artist's average rating
+
+      // Update ratings...
       final reviewsQuery = await FirebaseFirestore.instance
           .collection('reviews')
           .where('artist_id', isEqualTo: artistRef)
           .get();
+
       double totalRating = 0;
       for (var doc in reviewsQuery.docs) {
         final data = doc.data();
-        final rating = data['rating'];
-        if (rating is num) {
-          totalRating += rating.toDouble();
+        if (data['rating'] is num) {
+          totalRating += (data['rating'] as num).toDouble();
         }
       }
+
       double averageRating = reviewsQuery.docs.isNotEmpty
           ? totalRating / reviewsQuery.docs.length
           : 0.0;
-      // Update makeup_artists collection with new average rating
+
       await FirebaseFirestore.instance
           .collection('makeup_artists')
           .doc(_cachedArtistDetails!['artist_doc_id'])
@@ -195,6 +530,7 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
         'average_rating': averageRating,
         'total_reviews': reviewsQuery.docs.length,
       });
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Review submitted successfully!")),
@@ -202,7 +538,6 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
         Navigator.pop(context, true);
       }
     } catch (e) {
-      print('Error submitting review: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Failed to submit review: $e")),
@@ -290,6 +625,251 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
     );
   }
 
+  Widget _buildImageSearchLoading() {
+    return Container(
+      color: Colors.black54,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFDA9BF5)),
+                strokeWidth: 3,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Uploading review...',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Please wait',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Animated dots
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(3, (index) {
+                  return AnimatedContainer(
+                    duration: Duration(milliseconds: 600 + (index * 200)),
+                    curve: Curves.easeInOut,
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    height: 8,
+                    width: 8,
+                    decoration: BoxDecoration(
+                      color: Color(0xFFDA9BF5).withOpacity(0.7),
+                      shape: BoxShape.circle,
+                    ),
+                  );
+                }),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImageGrid() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              "Add Photos",
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: Colors.black87,
+              ),
+            ),
+            Text(
+              "${_selectedImages.length + _newImageFiles.length}/$maxImages",
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.black54,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 120),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: (_selectedImages.isEmpty && _newImageFiles.isEmpty)
+              ? _buildEmptyImageState()
+              : _buildImageList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyImageState() {
+    return InkWell(
+      onTap: _showImageOption,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        height: 120,
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.add_a_photo,
+              size: 40,
+              color: Colors.grey,
+            ),
+            SizedBox(height: 8),
+            Text(
+              "Tap to add photos",
+              style: TextStyle(
+                color: Colors.grey,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImageList() {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+              childAspectRatio: 1,
+            ),
+            itemCount: (_selectedImages.length + _newImageFiles.length) + ((_selectedImages.length + _newImageFiles.length) < maxImages ? 1 : 0),
+            itemBuilder: (context, index) {
+              int totalImages = _selectedImages.length + _newImageFiles.length;
+
+              if (index == totalImages) {
+                // Add button - only show if less than 6 images
+                return InkWell(
+                  onTap: _showImageOption,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Color(0xFFFB81EE), width: 2, style: BorderStyle.solid),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.add, color: Color(0xFFFB81EE), size: 30),
+                        Text("Add", style: TextStyle(color: Color(0xFFFB81EE), fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                );
+              } else {
+                // Determine if this is an existing image or new image
+                if (index < _selectedImages.length) {
+                  // Existing image
+                  return Stack(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          image: DecorationImage(
+                            image: FileImage(_selectedImages[index]),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: GestureDetector(
+                          onTap: () => _removeImage(index),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.close,
+                              color: Colors.white,
+                              size: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                } else {
+                  // New image
+                  int newImageIndex = index - _selectedImages.length;
+                  return Stack(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          image: DecorationImage(
+                            image: FileImage(File(_newImageFiles[newImageIndex].path)),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: GestureDetector(
+                          onTap: () => _removeNewImage(newImageIndex),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.close,
+                              color: Colors.white,
+                              size: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _reviewController.dispose();
@@ -325,6 +905,9 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
           ),
           // Review content
           _buildBody(),
+          // loading overlay when submitting
+          if (_isSubmitting)
+            _buildImageSearchLoading(),
         ],
       ),
     );
@@ -507,6 +1090,11 @@ class _WriteReviewPageState extends State<WriteReviewPage> {
               ),
             ),
           ),
+
+          const SizedBox(height: 30),
+
+          // Image Grid
+          _buildImageGrid(),
 
           const SizedBox(height: 40),
 

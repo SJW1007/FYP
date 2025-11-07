@@ -40,8 +40,8 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
   String _fromDay = 'Monday';
   String _toDay = 'Friday';
 
-  // Category dropdown variable
-  String _selectedCategory = 'Wedding';
+  // Category dropdown variable in list
+  List<String> _selectedCategories = ['Wedding'];
 
   // Time slot for customer variables
   String _workingSlotHour = '1 Hour';  // Fixed: Initialize with full string
@@ -49,6 +49,7 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
 
   // Portfolio images
   List<File?> _portfolioImages = List.filled(6, null);
+  List<TextEditingController> _priceControllers = [TextEditingController()];
 
   final List<String> _days = [
     'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
@@ -77,6 +78,121 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
     '4 Persons',
     '5 Persons',
   ];
+
+// Method to add a new category selection
+  void _addCategorySelection() {
+    if (_selectedCategories.length < _categoryOptions.length) {
+      setState(() {
+        try {
+          // Find first available category
+          String? newCategory;
+          for (String category in _categoryOptions) {
+            if (!_selectedCategories.contains(category)) {
+              newCategory = category;
+              break;
+            }
+          }
+
+          if (newCategory != null) {
+            _selectedCategories.add(newCategory);
+            _priceControllers.add(TextEditingController());
+          } else {
+            print('No more categories available');
+          }
+        } catch (e) {
+          print('Error adding category: $e');
+        }
+      });
+    }
+  }
+
+// Remove category with comprehensive bounds checking
+  void _removeCategorySelection(int index) {
+    if (_selectedCategories.length > 1 &&
+        index >= 0 &&
+        index < _selectedCategories.length) {
+      setState(() {
+        try {
+          // Dispose and remove price controller if it exists
+          if (index < _priceControllers.length) {
+            _priceControllers[index].dispose();
+            _priceControllers.removeAt(index);
+          }
+
+          // Remove the selected category
+          _selectedCategories.removeAt(index);
+
+          // Ensure controllers and categories lists are in sync
+          _ensureListsSynced();
+        } catch (e) {
+          print('Error removing category at index $index: $e');
+          // Attempt to recover by syncing lists
+          _ensureListsSynced();
+        }
+      });
+    }
+  }
+
+  // Helper method to ensure categories and controllers are synced
+  void _ensureListsSynced() {
+    // If controllers list is longer than categories, dispose and remove extras
+    while (_priceControllers.length > _selectedCategories.length) {
+      if (_priceControllers.isNotEmpty) {
+        _priceControllers.removeLast().dispose();
+      }
+    }
+
+    // If categories list is longer than controllers, add missing controllers
+    while (_priceControllers.length < _selectedCategories.length) {
+      _priceControllers.add(TextEditingController());
+    }
+  }
+
+// Method to update a specific category selection
+  void _updateCategorySelection(int index, String? newValue) {
+    if (newValue != null &&
+        index >= 0 &&
+        index < _selectedCategories.length) {
+      setState(() {
+        _selectedCategories[index] = newValue;
+      });
+    }
+  }
+// Method to get available categories for a specific dropdown
+  List<String> _getAvailableCategoriesForIndex(int currentIndex) {
+    List<String> availableCategories = [];
+
+    // Ensure currentIndex is valid and lists are in sync
+    if (currentIndex < 0 ||
+        currentIndex >= _selectedCategories.length ||
+        _selectedCategories.isEmpty) {
+      return _categoryOptions.isNotEmpty ? [_categoryOptions.first] : [];
+    }
+
+    String currentSelection = _selectedCategories[currentIndex];
+
+    for (String category in _categoryOptions) {
+      // Add category if it's not selected in other dropdowns or if it's the current selection
+      bool isSelectedElsewhere = false;
+      for (int i = 0; i < _selectedCategories.length; i++) {
+        if (i != currentIndex && _selectedCategories[i] == category) {
+          isSelectedElsewhere = true;
+          break;
+        }
+      }
+
+      if (!isSelectedElsewhere || currentSelection == category) {
+        availableCategories.add(category);
+      }
+    }
+
+    // Ensure current selection is always available
+    if (!availableCategories.contains(currentSelection)) {
+      availableCategories.add(currentSelection);
+    }
+
+    return availableCategories.isEmpty ? [currentSelection] : availableCategories;
+  }
 
   Future<void> _pickImage(int index) async {
     final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
@@ -257,6 +373,8 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
     );
   }
 
+
+
   Future<void> _registerUser() async {
     setState(() {
       _isLoading = true;
@@ -267,8 +385,33 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
     final phoneNumber = _phoneNumberController.text.trim();
     final email = _emailController.text.trim();
     final address = _addressController.text.trim();
-    final price = _priceController.text.trim();
     final about = _aboutController.text.trim();
+
+    // Check for duplicates before saving
+    final existingQuery = await _firestore.collection('makeup_artists')
+        .where('phone_number', isEqualTo: int.parse(phoneNumber))
+        .get();
+
+    final existingEmailQuery = await _firestore.collection('makeup_artists')
+        .where('email', isEqualTo: email)
+        .get();
+
+    if (existingQuery.docs.isNotEmpty) {
+      setState(() {
+        _errorMessage = 'This phone number is already registered.';
+        _isLoading = false;
+      });
+      return;
+    }
+
+    if (existingEmailQuery.docs.isNotEmpty) {
+      setState(() {
+        _errorMessage = 'This email is already registered.';
+        _isLoading = false;
+      });
+      return;
+    }
+
 
     // Comprehensive validation
     if (studioName.isEmpty) {
@@ -319,21 +462,23 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
       return;
     }
 
-    if (price.isEmpty) {
-      setState(() {
-        _errorMessage = 'Please enter price';
-        _isLoading = false;
-      });
-      return;
-    }
+    for (int i = 0; i < _priceControllers.length; i++) {
+      final price = _priceControllers[i].text.trim();
+      if (price.isEmpty) {
+        setState(() {
+          _errorMessage = 'Please enter price for ${_selectedCategories[i]}';
+          _isLoading = false;
+        });
+        return;
+      }
 
-    // Validate price format (string with RM prefix and optional range)
-    if (!_isValidPriceRange(price)) {
-      setState(() {
-        _errorMessage = 'Please enter a valid price format (e.g., RM400 or RM400-600)';
-        _isLoading = false;
-      });
-      return;
+      if (!_isValidPriceRange(price)) {
+        setState(() {
+          _errorMessage = 'Please enter a valid price format for ${_selectedCategories[i]} (e.g., RM400 or RM400-600)';
+          _isLoading = false;
+        });
+        return;
+      }
     }
 
     if (about.isEmpty) {
@@ -386,6 +531,10 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
 
       // Upload portfolio images to Firebase Storage
       List<String> portfolioUrls = [];
+      Map<String, String> categoryPrices = {};
+      for (int i = 0; i < _selectedCategories.length; i++) {
+        categoryPrices[_selectedCategories[i]] = _priceControllers[i].text.trim();
+      }
 
       for (int i = 0; i < _portfolioImages.length; i++) {
         final image = _portfolioImages[i];
@@ -407,11 +556,11 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
       int hourValue = int.parse(_workingSlotHour.split(' ')[0]);
       int personValue = int.parse(_workingSlotPerson.split(' ')[0]);
 
-      // Save data to Firestore - price is now stored as string
+      // Save data to Firestore
       await _firestore.collection('makeup_artists').add({
-        'category': _selectedCategory,
+        'category': _selectedCategories,
         'portfolio': portfolioUrls,
-        'price': price, // Store as string to support ranges like "RM400-600"
+        'price': categoryPrices, // Store as string to support ranges like "RM400-600"
         'time slot': {
           'hour': hourValue,
           'person': personValue,
@@ -423,12 +572,14 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
         },
         'working hour': '${_formatTimeOfDay(_startTime)} - ${_formatTimeOfDay(_endTime)}',
         'studio_name': studioName,
-        'phone_number': phoneNumber,
+        'phone_number': int.parse(phoneNumber),
         'email': email,
         'address': address,
         'status': 'Pending',
         'about': about,
         'created_at': FieldValue.serverTimestamp(),
+        "average_rating": 0,
+        "total_reviews": 0
       });
 
       setState(() {
@@ -444,6 +595,65 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
         _isLoading = false;
       });
     }
+  }
+
+  Widget _buildImageSearchLoading() {
+    return Container(
+      color: Colors.black54,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFDA9BF5)),
+                strokeWidth: 3,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Submitting application...',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Loading...',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Animated dots
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(3, (index) {
+                  return AnimatedContainer(
+                    duration: Duration(milliseconds: 600 + (index * 200)),
+                    curve: Curves.easeInOut,
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    height: 8,
+                    width: 8,
+                    decoration: BoxDecoration(
+                      color: Color(0xFFDA9BF5).withOpacity(0.7),
+                      shape: BoxShape.circle,
+                    ),
+                  );
+                }),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -616,17 +826,105 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
                   const SizedBox(height: 15),
 
                   // Category Dropdown Section
-                  const Text('Category', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8),
-                  _buildDropdown(
-                    value: _selectedCategory,
-                    items: _categoryOptions,
-                    onChanged: (value) => setState(() => _selectedCategory = value!),
-                    icon: Icons.category,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Category and Price',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+                    ],
                   ),
-
                   const SizedBox(height: 15),
-                  _buildTextField('Price Range', _priceController, Icons.attach_money),
+                  // Dynamic category dropdowns with proper bounds checking
+                  ListView.separated(
+                    padding: EdgeInsets.zero,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _selectedCategories.length,
+                    separatorBuilder: (context, index) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      // Ensure index is within bounds
+                      if (index >= _selectedCategories.length) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return Row(
+                        children: [
+                          // Category Dropdown
+                          Expanded(
+                            flex: 45,
+                            child: _buildCategoryDropdown(
+                              value: _selectedCategories[index],
+                              items: _getAvailableCategoriesForIndex(index),
+                              onChanged: (value) => _updateCategorySelection(index, value),
+                              icon: Icons.category,
+                            ),
+                          ),
+
+                          const SizedBox(width: 10),
+
+                          // Price Field
+                          Expanded(
+                            flex: 35,
+                            child: _buildPriceField(index),
+                          ),
+
+                          const SizedBox(width: 8),
+
+                          // Action Buttons - stacked when both present
+                          SizedBox(
+                            width: 40,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // Add Category Button
+                                if (index == _selectedCategories.length - 1 &&
+                                    _selectedCategories.length < _categoryOptions.length)
+                                  GestureDetector(
+                                    onTap: _addCategorySelection,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFB81EE),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: const Icon(
+                                        Icons.add,
+                                        color: Colors.white,
+                                        size: 14,
+                                      ),
+                                    ),
+                                  ),
+
+                                // Spacing between stacked buttons
+                                if (index == _selectedCategories.length - 1 &&
+                                    _selectedCategories.length < _categoryOptions.length &&
+                                    _selectedCategories.length > 1)
+                                  const SizedBox(height: 4),
+
+                                // Remove Category Button
+                                if (_selectedCategories.length > 1)
+                                  GestureDetector(
+                                    onTap: () => _removeCategorySelection(index),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.shade100,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Icon(
+                                        Icons.remove,
+                                        color: Colors.red.shade600,
+                                        size: 14,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
                   const SizedBox(height: 15),
 
                   // About field with icon beside the label
@@ -663,10 +961,11 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
                   const SizedBox(height: 4),
                   const Text('(At least one photo required)',
                       style: TextStyle(fontSize: 12, color: Colors.grey, fontStyle: FontStyle.italic)),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 15),
 
                   // Grid layout for portfolio photos (2x3 grid)
                   GridView.builder(
+                    padding: EdgeInsets.zero,
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -701,9 +1000,7 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
                   const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
-                    child: _isLoading
-                        ? const Center(child: CircularProgressIndicator())
-                        : ElevatedButton(
+                    child: ElevatedButton(
                       onPressed: _registerUser,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFC367CA),
@@ -719,7 +1016,51 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
               ),
             ),
           ),
+          if (_isLoading)
+            _buildImageSearchLoading(),
         ],
+      ),
+    );
+  }
+  Widget _buildCategoryDropdown({
+    required String value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+    required IconData icon,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFFB81EE)),
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: DropdownButtonFormField<String>(
+        value: items.contains(value) ? value : (items.isNotEmpty ? items.first : null),
+        decoration: InputDecoration(
+          prefixIcon: Icon(icon, color: const Color(0xFFFB81EE), size: 20), // Reduced icon size
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12), // Reduced padding
+          isDense: true, // Make it more compact
+        ),
+        items: items.map((String item) {
+          return DropdownMenuItem<String>(
+            value: item,
+            child: Text(
+              item,
+              overflow: TextOverflow.ellipsis, // IMPORTANT: Prevent text overflow
+              maxLines: 1, // IMPORTANT: Single line only
+              style: const TextStyle(fontSize: 13), // Slightly smaller font
+            ),
+          );
+        }).toList(),
+        onChanged: onChanged,
+        style: const TextStyle(color: Colors.black, fontSize: 13), // Smaller selected text
+        dropdownColor: Colors.white,
+        isExpanded: true, // IMPORTANT: Allow dropdown to fill available space
+        icon: const Icon(
+          Icons.keyboard_arrow_down,
+          size: 20, // Smaller dropdown arrow
+          color: Color(0xFFFB81EE),
+        ),
       ),
     );
   }
@@ -886,19 +1227,58 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
     }
   }
 
+  Widget _buildPriceField(int index) {
+    // Ensure the controller exists for this index
+    if (index >= _priceControllers.length) {
+      // Add missing controllers
+      while (_priceControllers.length <= index) {
+        _priceControllers.add(TextEditingController());
+      }
+    }
+
+    return TextField(
+      controller: _priceControllers[index],
+      decoration: InputDecoration(
+        prefixIcon: const Icon(Icons.attach_money, color: Color(0xFFFB81EE)),
+        hintText: 'RM400-600',
+        hintStyle: const TextStyle(color: Colors.grey),
+        enabledBorder: OutlineInputBorder(
+          borderSide: const BorderSide(color: Color(0xFFFB81EE)),
+          borderRadius: BorderRadius.circular(30),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderSide: const BorderSide(color: Color(0xFFFB81EE)),
+          borderRadius: BorderRadius.circular(30),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        isDense: true,
+      ),
+      style: const TextStyle(fontSize: 14),
+    );
+  }
+
+
   Widget _buildDropdown({
     required String value,
     required List<String> items,
     required ValueChanged<String?> onChanged,
     required IconData icon,
   }) {
+    // Ensure items list is not empty
+    if (items.isEmpty) {
+      items = _categoryOptions.isNotEmpty ? [_categoryOptions.first] : ['Default'];
+    }
+
+    // Ensure value exists in items
+    String selectedValue = items.contains(value) ? value : items.first;
+
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: const Color(0xFFFB81EE)),
         borderRadius: BorderRadius.circular(30),
       ),
       child: DropdownButtonFormField<String>(
-        value: value,
+        value: selectedValue,
         decoration: InputDecoration(
           prefixIcon: Icon(icon, color: const Color(0xFFFB81EE)),
           border: InputBorder.none,
@@ -907,12 +1287,16 @@ class _RegisterMakeupArtistDetailPageState extends State<RegisterMakeupArtistDet
         items: items.map((String item) {
           return DropdownMenuItem<String>(
             value: item,
-            child: Text(item),
+            child: Text(
+              item,
+              overflow: TextOverflow.ellipsis,
+            ),
           );
         }).toList(),
         onChanged: onChanged,
         style: const TextStyle(color: Colors.black),
         dropdownColor: Colors.white,
+        isExpanded: true,
       ),
     );
   }

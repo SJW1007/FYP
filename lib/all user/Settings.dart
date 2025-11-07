@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../service/FcmService.dart';
 import 'VerifyPassword.dart';
 import 'Login.dart';
+import '../user/ReportDetailsPage.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -54,15 +56,12 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _logout(BuildContext context) async {
+    await FCMService().deleteToken();
     await FirebaseAuth.instance.signOut();
-    Navigator.of(context).pushReplacement(
+    // Use pushAndRemoveUntil to clear the entire navigation stack
+    Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => LoginPage()),
-    );
-  }
-
-  void _navigateToUpdatePassword(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => VerifyPasswordPage()),
+          (route) => false, // This removes all previous routes
     );
   }
 
@@ -92,6 +91,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 children: [
                   Row(
                     children: [
+                      if(userRole!='admin')
                       IconButton(
                         icon: const Icon(Icons.close),
                         onPressed: () => Navigator.pop(context),
@@ -121,8 +121,19 @@ class _SettingsPageState extends State<SettingsPage> {
                       _buildButton(
                         icon: Icons.lock_reset,
                         label: "Update Password",
-                        onPressed: () => _navigateToUpdatePassword(context),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => VerifyPasswordPage()),
+                        ),
                       ),
+                    const SizedBox(height: 20),
+                    if (userRole == 'user')
+                    _buildButton(
+                      icon: Icons.report,
+                      label: "Report Status",
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => ReportDetailsPage()),
+                      ),
+                    ),
                   ],
                 ],
               ),

@@ -11,12 +11,12 @@ enum UserType { user, makeupArtist }
 
 class EditProfilePage extends StatefulWidget {
   final String name;
-  final String phone;
+  final dynamic phone;
   final String profilePicture;
   final UserType userType;
 
 // Additional fields for makeup artist
-  final String? artistPhone;  //nullable
+  final dynamic? artistPhone;
   final String? artistEmail;
   final String? studioName;
   final String? address;
@@ -27,8 +27,8 @@ class EditProfilePage extends StatefulWidget {
   final String? workingDayTo;
   final String? workingSlotHour;
   final String? workingSlotPerson;
-  final String? category;
-  final String? price;
+  final List<dynamic>? category;
+  final Map<String, dynamic>? price;
   final List<String>? portfolioImages;
 
   const EditProfilePage({
@@ -71,7 +71,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   final TextEditingController _artistEmailController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _aboutController = TextEditingController();
-  final TextEditingController _priceController = TextEditingController();
+
 
   File? _newProfileImage;
   final picker = ImagePicker();
@@ -83,7 +83,6 @@ class _EditProfilePageState extends State<EditProfilePage> {
   String? _workingDayTo;
   String? _workingSlotHour;
   String? _workingSlotPerson;
-  String? _category;
 
   final List<String> _days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   final List<String> _categories = ['Wedding', 'Cosplay', 'Korean Style'];
@@ -96,7 +95,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
   List<String> _deletedPortfolioUrls = []; // Track deleted images
   List<File> _newPortfolioImages = []; // New images to upload
   Map<int, File> _replacedImages = {}; // Track replaced images by index
+  List<String> selectedCategories = [];
+  Map<String, TextEditingController> priceControllers = {};
+  List<Map<String, dynamic>> categoryPriceList = [];
 
+  @override
   @override
   void initState() {
     super.initState();
@@ -106,26 +109,110 @@ class _EditProfilePageState extends State<EditProfilePage> {
     if (widget.portfolioImages != null) {
       _existingPortfolioUrls = List<String>.from(widget.portfolioImages!);
     }
+
+    // Initialize categories and prices - UPDATED LOGIC
+    if (widget.userType == UserType.makeupArtist) {
+      if (widget.category != null && widget.price != null) {
+        // If we have both category and price data
+        if (widget.category is List) {
+          // Multiple categories
+          List<dynamic> categories = widget.category as List<dynamic>;
+          for (int i = 0; i < categories.length; i++) {
+            String category = categories[i].toString();
+            String price = '';
+
+            if (widget.price is Map<String, dynamic>) {
+              price = widget.price![category]?.toString() ?? '';
+            } else if (i == 0 && widget.price is String) {
+              // If price is a string, assign it to the first category
+              price = widget.price as String;
+            }
+
+            categoryPriceList.add({
+              'category': category,
+              'priceController': TextEditingController(text: price),
+            });
+          }
+        } else {
+          // Single category
+          String category = widget.category.toString();
+          String price = '';
+
+          if (widget.price is Map<String, dynamic>) {
+            price = widget.price![category]?.toString() ?? '';
+          } else if (widget.price is String) {
+            price = widget.price as String;
+          }
+
+          categoryPriceList.add({
+            'category': category,
+            'priceController': TextEditingController(text: price),
+          });
+        }
+      }
+
+      // If no existing data, add one empty entry
+      if (categoryPriceList.isEmpty) {
+        categoryPriceList.add({
+          'category': _categories.first,
+          'priceController': TextEditingController(),
+        });
+      }
+    }
   }
 
   void _initializeFields() {
     _nameController.text = widget.name;
-    _phoneController.text = widget.phone;
+    _phoneController.text = ('0${widget.phone.toString()}');
 
     if (widget.userType == UserType.makeupArtist) {
       _studioNameController.text = widget.studioName ?? '';
-      _artistPhoneController.text = widget.artistPhone ?? '';
+      // Make sure artistPhone is initialized properly
+      _artistPhoneController.text = ('0${widget.artistPhone.toString()}') ;
       _artistEmailController.text = widget.artistEmail ?? '';
       _addressController.text = widget.address ?? '';
       _aboutController.text = widget.about ?? '';
-      _priceController.text = widget.price ?? '';
       _startTime = widget.startTime;
       _endTime = widget.endTime;
       _workingDayFrom = widget.workingDayFrom;
       _workingDayTo = widget.workingDayTo;
       _workingSlotHour = widget.workingSlotHour;
       _workingSlotPerson = widget.workingSlotPerson;
-      _category = widget.category;
+    }
+  }
+
+  List<String> _getAvailableCategories([int? excludeIndex]) {
+    Set<String> selectedCategories = {};
+
+    for (int i = 0; i < categoryPriceList.length; i++) {
+      if (excludeIndex == null || i != excludeIndex) {
+        selectedCategories.add(categoryPriceList[i]['category']);
+      }
+    }
+
+    return _categories.where((category) => !selectedCategories.contains(category)).toList();
+  }
+
+//method to add a new category-price pair
+  void _addCategoryPrice() {
+    List<String> availableCategories = _getAvailableCategories();
+    if (availableCategories.isNotEmpty && categoryPriceList.length < _categories.length) {
+      setState(() {
+        categoryPriceList.add({
+          'category': availableCategories.first,
+          'priceController': TextEditingController(),
+        });
+      });
+    }
+  }
+
+//method to remove a category-price pair
+  void _removeCategoryPrice(int index) {
+    if (categoryPriceList.length > 1) {
+      setState(() {
+        categoryPriceList[index]['priceController'].dispose();
+        categoryPriceList.removeAt(index);
+      });
     }
   }
 
@@ -179,23 +266,23 @@ class _EditProfilePageState extends State<EditProfilePage> {
       return false;
     }
 
-    // Validate user's personal phone number (required for both types)
-    if (_phoneController.text.isEmpty) {
-      setState(() {
-        _errorMessage = 'Personal phone number is required';
-      });
-      return false;
-    }
+    if (widget.userType == UserType.user) {
+      // For regular users - validate personal phone number
+      if (_phoneController.text.isEmpty) {
+        setState(() {
+          _errorMessage = 'Phone number is required';
+        });
+        return false;
+      }
 
-    if (!_isValidMalaysianPhone(_phoneController.text)) {
-      setState(() {
-        _errorMessage = 'Please enter a valid personal phone number (10-11 digits)';
-      });
-      return false;
-    }
-
-    // Additional validation for makeup artists
-    if (widget.userType == UserType.makeupArtist) {
+      if (!_isValidMalaysianPhone(_phoneController.text)) {
+        setState(() {
+          _errorMessage = 'Please enter a valid phone number (10-11 digits)';
+        });
+        return false;
+      }
+    } else if (widget.userType == UserType.makeupArtist) {
+      // For makeup artists - validate all required fields
       if (_studioNameController.text.isEmpty) {
         setState(() {
           _errorMessage = 'Studio name is required';
@@ -253,13 +340,6 @@ class _EditProfilePageState extends State<EditProfilePage> {
         return false;
       }
 
-      if (_category == null) {
-        setState(() {
-          _errorMessage = 'Category is required';
-        });
-        return false;
-      }
-
       if (_artistEmailController.text.isEmpty) {
         setState(() {
           _errorMessage = 'Email is required';
@@ -272,16 +352,27 @@ class _EditProfilePageState extends State<EditProfilePage> {
         return false;
       }
 
-      if (_priceController.text.isEmpty) {
+      if (categoryPriceList.isEmpty) {
         setState(() {
-          _errorMessage = 'Price is required';
+          _errorMessage = 'At least one category and price is required';
         });
         return false;
-      } else if (!_isValidPriceRange(_priceController.text)) {
-        setState(() {
-          _errorMessage = 'Please enter a valid price format (e.g., RM400 or RM400-600)';
-        });
-        return false;
+      }
+
+      for (int i = 0; i < categoryPriceList.length; i++) {
+        String price = categoryPriceList[i]['priceController'].text.trim();
+        if (price.isEmpty) {
+          setState(() {
+            _errorMessage = 'Price is required for all categories';
+          });
+          return false;
+        }
+        if (!_isValidPriceRange(price)) {
+          setState(() {
+            _errorMessage = 'Please enter valid price format (e.g., RM400 or RM400-600) for all categories';
+          });
+          return false;
+        }
       }
     }
 
@@ -312,6 +403,107 @@ class _EditProfilePageState extends State<EditProfilePage> {
   }
 
   Future<void> _pickImage() async {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Select Photo',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _takePhoto();
+                        },
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFDA9BF5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Camera'),
+                    ],
+                  ),
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _pickFromGallery();
+                        },
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFDA9BF5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.photo_library,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Gallery'),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _takePhoto() async {
+    final pickedFile = await picker.pickImage(source: ImageSource.camera);
+    if (pickedFile != null) {
+      setState(() {
+        _newProfileImage = File(pickedFile.path);
+      });
+    }
+  }
+
+  Future<void> _pickFromGallery() async {
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
       setState(() {
@@ -322,14 +514,124 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   // portfolio picking method
   Future<void> _pickPortfolioImage({int? replaceIndex}) async {
+    _showPortfolioImageSourceDialog(replaceIndex: replaceIndex);
+  }
+
+  void _showPortfolioImageSourceDialog({int? replaceIndex}) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Select Portfolio Photo',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _takePortfolioPhoto(replaceIndex: replaceIndex);
+                        },
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFDA9BF5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Camera'),
+                    ],
+                  ),
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _pickPortfolioFromGallery(replaceIndex: replaceIndex);
+                        },
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFDA9BF5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.photo_library,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Gallery'),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _takePortfolioPhoto({int? replaceIndex}) async {
+    final pickedFile = await picker.pickImage(source: ImageSource.camera);
+    if (pickedFile != null) {
+      setState(() {
+        if (replaceIndex != null) {
+          _replacedImages[replaceIndex] = File(pickedFile.path);
+        } else {
+          int currentCount = _getTotalPortfolioCount();
+          if (currentCount < MAX_PORTFOLIO_IMAGES) {
+            _newPortfolioImages.add(File(pickedFile.path));
+          }
+        }
+      });
+    }
+  }
+
+  Future<void> _pickPortfolioFromGallery({int? replaceIndex}) async {
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
       setState(() {
         if (replaceIndex != null) {
-          // Replace existing image
           _replacedImages[replaceIndex] = File(pickedFile.path);
         } else {
-          // Add new image (only if under limit)
           int currentCount = _getTotalPortfolioCount();
           if (currentCount < MAX_PORTFOLIO_IMAGES) {
             _newPortfolioImages.add(File(pickedFile.path));
@@ -396,6 +698,60 @@ class _EditProfilePageState extends State<EditProfilePage> {
       });
 
       try {
+        // Determine which phone number controller to check
+        final phoneToCheck = widget.userType == UserType.makeupArtist
+            ? _artistPhoneController.text
+            : _phoneController.text;
+
+        // Remove leading zero if you store in DB without it
+        final phoneNumberNoZero = phoneToCheck.startsWith('0')
+            ? phoneToCheck.substring(1)
+            : phoneToCheck;
+
+        // 1️⃣ Check uniqueness
+        if (widget.userType == UserType.user) {
+          final existingUser = await FirebaseFirestore.instance
+              .collection('users')
+              .where('phone number', isEqualTo: int.parse(phoneNumberNoZero))
+              .where(FieldPath.documentId, isNotEqualTo: user.uid) // exclude self
+              .get();
+
+          if (existingUser.docs.isNotEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Phone number already exists for another user.')),
+            );
+            setState(() => _isLoading = false);
+            return;
+          }
+        } else if (widget.userType == UserType.makeupArtist) {
+          final existingArtist = await FirebaseFirestore.instance
+              .collection('makeup_artists')
+              .where('phone_number', isEqualTo: int.parse(phoneNumberNoZero))
+              .where('user_id', isNotEqualTo: FirebaseFirestore.instance.collection('users').doc(user.uid))
+              .get();
+
+          if (existingArtist.docs.isNotEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Phone number already exists for another makeup artist.')),
+            );
+            setState(() => _isLoading = false);
+            return;
+          }
+          // 📧 Check email uniqueness
+          final existingArtistEmail = await FirebaseFirestore.instance
+              .collection('makeup_artists')
+              .where('email', isEqualTo: _artistEmailController.text.trim())
+              .where('user_id', isNotEqualTo: FirebaseFirestore.instance.collection('users').doc(user.uid))
+              .get();
+
+          if (existingArtistEmail.docs.isNotEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Email already exists for another makeup artist.')),
+            );
+            setState(() => _isLoading = false);
+            return;
+          }
+        }
         String imageUrl = widget.profilePicture;
 
         // Upload profile image
@@ -475,7 +831,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
         Map<String, dynamic> basicUserData = {
           'name': userName,
-          'phone number': userPhoneNumber,
+          'phone number': int.parse(userPhoneNumber),
           'profile pictures': imageUrl,
         };
 
@@ -506,14 +862,20 @@ class _EditProfilePageState extends State<EditProfilePage> {
               'person': _getPersonFromSlot(_workingSlotPerson ?? '1 Person'),
             };
 
+            List<String> categories = categoryPriceList.map((item) => item['category'] as String).toList();
+            Map<String, String> prices = {};
+            for (var item in categoryPriceList) {
+              prices[item['category']] = item['priceController'].text;
+            }
+
             Map<String, dynamic> makeupArtistData = {
               'studio_name': _studioNameController.text,
-              'phone_number': _artistPhoneController.text,
+              'phone_number': int.parse(_artistPhoneController.text),
               'email': _artistEmailController.text,
               'address': _addressController.text,
               'about': _aboutController.text,
-              'category': _category ?? 'Wedding',
-              'price': _priceController.text,
+              'category': categories,
+              'price': prices,
               'working hour': workingHour,
               'working day': workingDay,
               'time slot': timeSlot,
@@ -548,6 +910,64 @@ class _EditProfilePageState extends State<EditProfilePage> {
     // Extract number from "1 Person", "2 Persons", etc.
     final match = RegExp(r'(\d+)').firstMatch(personSlot);
     return match != null ? int.parse(match.group(1)!) : 1;
+  }
+
+  Widget _buildLoading() {
+    return Container(
+      color: Colors.black54,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFDA9BF5)),
+                strokeWidth: 3,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Updating profile...',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Please wait',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(3, (index) {
+                  return AnimatedContainer(
+                    duration: Duration(milliseconds: 600 + (index * 200)),
+                    curve: Curves.easeInOut,
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    height: 8,
+                    width: 8,
+                    decoration: BoxDecoration(
+                      color: Color(0xFFDA9BF5).withOpacity(0.7),
+                      shape: BoxShape.circle,
+                    ),
+                  );
+                }),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -705,6 +1125,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
               ],
             ),
           ),
+          if (_isLoading) _buildLoading(),
         ],
       ),
     );
@@ -895,54 +1316,155 @@ class _EditProfilePageState extends State<EditProfilePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Category and Price", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text("Category", style: TextStyle(fontSize: 12)),
-                  const SizedBox(height: 4),
-                  buildDropdown(_category ?? "Wedding", _categories, (value) => setState(() => _category = value)),
-                ],
+            const Text("Category & Prices", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            const Spacer(),
+            Text(
+              "${categoryPriceList.length}/${_categories.length}",
+              style: TextStyle(
+                fontSize: 12,
+                color: categoryPriceList.length >= _categories.length ? Colors.red : Colors.grey[600],
+                fontWeight: FontWeight.w500,
               ),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text("Price", style: TextStyle(fontSize: 12)),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ],
+        ),
+        const SizedBox(height: 8),
+
+        // List of category-price rows
+        ...categoryPriceList.asMap().entries.map((entry) {
+          int index = entry.key;
+          Map<String, dynamic> item = entry.value;
+
+          List<String> availableForThisIndex = _getAvailableCategories(index);
+          availableForThisIndex.add(item['category']); // Add current selection
+          availableForThisIndex = availableForThisIndex.toSet().toList(); // Remove duplicates
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                // Category Dropdown
+                Expanded(
+                  flex: 2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF2D7F5),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: availableForThisIndex.contains(item['category'])
+                            ? item['category']
+                            : availableForThisIndex.first,
+                        isExpanded: true,
+                        items: availableForThisIndex.map((String category) {
+                          return DropdownMenuItem<String>(
+                            value: category,
+                            child: Text(category, style: const TextStyle(fontSize: 14)),
+                          );
+                        }).toList(),
+                        onChanged: (String? newValue) {
+                          if (newValue != null) {
+                            setState(() {
+                              categoryPriceList[index]['category'] = newValue;
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFFE91E63)),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(width: 12),
+
+                // Price TextField
+                Expanded(
+                  flex: 2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     decoration: BoxDecoration(
                       color: const Color(0xFFF2D7F5),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: TextField(
-                      controller: _priceController,
+                      controller: item['priceController'],
                       decoration: const InputDecoration(
                         border: InputBorder.none,
-                        hintText: "RMxxx",
+                        hintText: "RM400 or RM400-600",
+                        hintStyle: TextStyle(fontSize: 12, color: Colors.grey),
                         isDense: true,
-                        contentPadding: EdgeInsets.zero,
+                        contentPadding: EdgeInsets.symmetric(vertical: 8),
                       ),
+                      style: const TextStyle(fontSize: 14),
                     ),
                   ),
-                ],
-              ),
+                ),
+
+                const SizedBox(width: 8),
+
+                // Action Buttons
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Add button (only show on last item if not at limit)
+                    if (index == categoryPriceList.length - 1 &&
+                        categoryPriceList.length < _categories.length)
+                      GestureDetector(
+                        onTap: _addCategoryPrice,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFE91E63),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.add,
+                            color: Colors.white,
+                            size: 14,
+                          ),
+                        ),
+                      ),
+
+                    // Add spacing between buttons if both are visible
+                    if (index == categoryPriceList.length - 1 &&
+                        categoryPriceList.length < _categories.length &&
+                        categoryPriceList.length > 1)
+                      const SizedBox(height: 4),
+
+                    // Remove button (only show if more than one item)
+                    if (categoryPriceList.length > 1)
+                      GestureDetector(
+                        onTap: () => _removeCategoryPrice(index),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade100,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.remove,
+                            color: Colors.red.shade600,
+                            size: 14,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        }).toList(),
+
         const SizedBox(height: 16),
       ],
     );
   }
 
-  // Enhanced portfolio section widget
+  // portfolio section widget
   Widget buildPortfolioSection() {
     List<Widget> portfolioWidgets = [];
 
@@ -1091,8 +1613,6 @@ class _EditProfilePageState extends State<EditProfilePage> {
     );
   }
 
-
-
   Widget buildDropdown(String value, List<String> items, Function(String?) onChanged) {
     // Ensure the value exists in the items list, otherwise use the first item
     String validValue = items.contains(value) ? value : items.first;
@@ -1166,6 +1686,16 @@ class _EditProfilePageState extends State<EditProfilePage> {
           inputFormatters: [
             FilteringTextInputFormatter.digitsOnly, // Only allow digits
             LengthLimitingTextInputFormatter(11), // Limit to 11 characters
+            TextInputFormatter.withFunction((oldValue, newValue) {
+              // Auto-add '0' at the beginning if user starts typing without it
+              if (newValue.text.isNotEmpty && !newValue.text.startsWith('0')) {
+                return TextEditingValue(
+                  text: '0${newValue.text}',
+                  selection: TextSelection.collapsed(offset: newValue.text.length + 1),
+                );
+              }
+              return newValue;
+            }),
           ],
           decoration: InputDecoration(
             filled: true,

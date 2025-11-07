@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../all user/Login.dart';
-import '../makeup_artist/RegisterMakeupArtist.dart';
+import 'Login.dart';
+import 'EmailVerificationPage.dart';
+import 'Policy.dart';
 
 class RegisterPage extends StatefulWidget {
-  const RegisterPage({super.key});
+  final String role; // 'User' or 'MakeupArtist'
+
+  const RegisterPage({super.key, required this.role});
 
   @override
   State<RegisterPage> createState() => _RegisterPageState();
@@ -23,13 +26,15 @@ class _RegisterPageState extends State<RegisterPage> {
   final _firestore = FirebaseFirestore.instance;
   bool _passwordVisible = false;
   bool _confirmPasswordVisible = false;
+  bool _agreedToPolicy = false;
 
   bool _isLoading = false;
   String? _errorMessage;
 
-  Future<Map<String, bool>> checkUsernameEmailExists(String username, String email) async {
+  Future<Map<String, bool>> checkUsernameEmailExists(String username, String email, String phoneNumber) async {
     bool usernameExists = false;
     bool emailExists = false;
+    bool phoneExists = false;
 
     // Check username
     final usernameSnapshot = await _firestore
@@ -47,23 +52,26 @@ class _RegisterPageState extends State<RegisterPage> {
         .get();
     emailExists = emailSnapshot.docs.isNotEmpty;
 
+    final phoneSnapshot = await _firestore
+        .collection('users')
+        .where('phone number', isEqualTo: phoneNumber)
+        .limit(1)
+        .get();
+    phoneExists = phoneSnapshot.docs.isNotEmpty;
+
     return {
       'usernameExists': usernameExists,
       'emailExists': emailExists,
+      'phoneExists': phoneExists
     };
   }
 
-  // Simple phone number validation (10-11 digits)
   bool _isValidMalaysianPhone(String phone) {
-    // Remove all non-digits
     String digitsOnly = phone.replaceAll(RegExp(r'[^\d]'), '');
-
-    // Check if it's between 10-11 digits
     return digitsOnly.length >= 10 && digitsOnly.length <= 11;
   }
 
   bool _isValidEmail(String email) {
-    // Regular expression for email validation
     final emailRegex = RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$');
     return emailRegex.hasMatch(email);
   }
@@ -81,7 +89,15 @@ class _RegisterPageState extends State<RegisterPage> {
     final password = _passwordController.text;
     final confirmPassword = _confirmPasswordController.text;
 
-    // Field validation
+    // Check if policy is agreed
+    if (!_agreedToPolicy) {
+      setState(() {
+        _errorMessage = 'You must agree to the Terms and Privacy Policies to continue.';
+        _isLoading = false;
+      });
+      return;
+    }
+
     if (name.isEmpty) {
       setState(() {
         _errorMessage = 'Please fill in the name.';
@@ -106,7 +122,6 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
 
-    // Email format validation - ADD THIS
     if (!_isValidEmail(email)) {
       setState(() {
         _errorMessage = 'Please enter a valid email address.';
@@ -123,7 +138,6 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
 
-    // Validate phone number (10-11 digits)
     if (!_isValidMalaysianPhone(phone_number)) {
       setState(() {
         _errorMessage = 'Please enter a valid phone number (10-11 digits).';
@@ -148,7 +162,6 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
 
-    // Username validation: at least 6 characters, 1 number, and 1 symbol
     final usernameRegex = RegExp(r'^(?=.*\d)(?=.*[^A-Za-z0-9]).{6,}$');
     if (!usernameRegex.hasMatch(username)) {
       setState(() {
@@ -158,7 +171,6 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
 
-    // Password validation
     final passwordRegex = RegExp(r'^(?=.*[A-Z])(?=.*\d)(?=.*[!@#\$&*~]).{6,}$');
     if (!passwordRegex.hasMatch(password)) {
       setState(() {
@@ -178,7 +190,7 @@ class _RegisterPageState extends State<RegisterPage> {
 
     try {
       // Check if username/email exists in Firestore
-      final checkResult = await checkUsernameEmailExists(username, email);
+      final checkResult = await checkUsernameEmailExists(username, email, phone_number);
 
       if (checkResult['usernameExists'] ?? false) {
         setState(() {
@@ -196,36 +208,61 @@ class _RegisterPageState extends State<RegisterPage> {
         return;
       }
 
+      if (checkResult['phoneExists'] ?? false) {
+        setState(() {
+          _errorMessage = 'Phone Number already exists.';
+          _isLoading = false;
+        });
+        return;
+      }
+
       // Register with Firebase Auth
-      final userCredential = await _auth.createUserWithEmailAndPassword(
+      await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
 
-      final userId = userCredential.user!.uid;
-      const defaultProfilePicUrl = 'https://firebasestorage.googleapis.com/v0/b/fyp-makeup-artist-booking.firebasestorage.app/o/default%2Fimage%2010.png?alt=media&token=824d9761-509f-4090-a6df-96ecd61799c8';
-
-      // Save user details to Firestore
-      await _firestore.collection('users').doc(userId).set({
-        'name': name,
-        'username': username,
-        'email': email,
-        'phone number': phone_number,
-        'role': 'user',
-        'profile pictures': defaultProfilePicUrl,
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Registration successful!")),
-      );
-
+      // Navigate to email verification page
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => const LoginPage()),
+        MaterialPageRoute(
+          builder: (context) => EmailVerificationPage(
+            email: email,
+            name: name,
+            username: username,
+            phoneNumber: phone_number,
+            role: widget.role,
+          ),
+        ),
       );
+
     } on FirebaseAuthException catch (e) {
+      // If there's an error, clean up the auth account
+      final currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        try {
+          await currentUser.delete();  // ✅ Only delete auth user, no Firestore record exists yet
+        } catch (cleanupError) {
+          print('Error cleaning up after failed registration: $cleanupError');
+        }
+      }
+
       setState(() {
         _errorMessage = e.message;
+      });
+    }catch (e) {
+      // Handle any other errors
+      final currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        try {
+          await currentUser.delete();  // Only delete auth user, no Firestore record exists yet
+        } catch (cleanupError) {
+          print('Error cleaning up after failed registration: $cleanupError');
+        }
+      }
+
+      setState(() {
+        _errorMessage = 'An error occurred during registration. Please try again.';
       });
     } finally {
       setState(() {
@@ -236,6 +273,9 @@ class _RegisterPageState extends State<RegisterPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Determine if registering as makeup artist
+    bool isMakeupArtist = widget.role == 'MakeupArtist';
+
     return Scaffold(
       body: Stack(
         children: [
@@ -251,15 +291,20 @@ class _RegisterPageState extends State<RegisterPage> {
           // Foreground Content
           SingleChildScrollView(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0),
-              height: MediaQuery.of(context).size.height,
+              padding: EdgeInsets.symmetric(
+                horizontal: MediaQuery.of(context).size.width * 0.06,
+                vertical: MediaQuery.of(context).size.height * 0.05,
+              ),
+              constraints: BoxConstraints(
+                minHeight: MediaQuery.of(context).size.height,
+              ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  const Text(
-                    'Register',
-                    style: TextStyle(
+                  Text(
+                    isMakeupArtist ? 'Register as Makeup Artist' : 'Register',
+                    style: const TextStyle(
                       fontSize: 28,
                       fontFamily: 'Georgia',
                       fontWeight: FontWeight.bold,
@@ -310,7 +355,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     child: Text('Phone Number', style: TextStyle(fontSize: 16, color: Colors.black)),
                   ),
                   const SizedBox(height: 8),
-                  _buildPhoneTextField(), // Use special phone field
+                  _buildPhoneTextField(),
                   const SizedBox(height: 15),
 
                   // Password Field
@@ -353,15 +398,86 @@ class _RegisterPageState extends State<RegisterPage> {
                   ),
                   const SizedBox(height: 20),
 
+                  // Policy Agreement Checkbox
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _errorMessage != null && !_agreedToPolicy
+                            ? Colors.red
+                            : const Color(0xFFFB81EE),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Checkbox(
+                          value: _agreedToPolicy,
+                          onChanged: (value) {
+                            setState(() {
+                              _agreedToPolicy = value ?? false;
+                              if (_agreedToPolicy) _errorMessage = null;
+                            });
+                          },
+                          activeColor: const Color(0xFFC367CA),
+                          checkColor: Colors.white,
+                        ),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _agreedToPolicy = !_agreedToPolicy;
+                                if (_agreedToPolicy) _errorMessage = null;
+                              });
+                            },
+                            child: RichText(
+                              text: TextSpan(
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.black87,
+                                ),
+                                children: [
+                                  const TextSpan(text: 'I agree to the '),
+                                  WidgetSpan(
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => const PolicyAgreementPage(),
+                                          ),
+                                        );
+                                      },
+                                      child: const Text(
+                                        'Terms and Privacy Policies',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: Color(0xFFC367CA),
+                                          fontWeight: FontWeight.bold,
+                                          decoration: TextDecoration.underline,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
                   if (_errorMessage != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: Text(_errorMessage!, style: TextStyle(color: Colors.red)),
                     ),
 
-                  _isLoading
-                      ? const CircularProgressIndicator()
-                      : ElevatedButton(
+                  ElevatedButton(
                     onPressed: _registerUser,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFC367CA),
@@ -391,9 +507,16 @@ class _RegisterPageState extends State<RegisterPage> {
                       TextButton(
                         onPressed: () => Navigator.pushReplacement(
                           context,
-                          MaterialPageRoute(builder: (context) => RegisterMakeupArtistPage()),
+                          MaterialPageRoute(
+                            builder: (context) => RegisterPage(
+                              role: isMakeupArtist ? 'User' : 'MakeupArtist',
+                            ),
+                          ),
                         ),
-                        child: const Text('Sign Up As Makeup Artist', style: TextStyle(color: Colors.black)),
+                        child: Text(
+                          isMakeupArtist ? 'Sign Up As User' : 'Sign Up As Makeup Artist',
+                          style: TextStyle(color: Colors.black),
+                        ),
                       ),
                     ],
                   ),
@@ -401,19 +524,77 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
             ),
           ),
+          if (_isLoading) _buildLoading(),
         ],
       ),
     );
   }
 
-  // Simple phone number text field
+  Widget _buildLoading() {
+    return Container(
+      color: Colors.black54,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFDA9BF5)),
+                strokeWidth: 3,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Processing...',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Please wait',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(3, (index) {
+                  return AnimatedContainer(
+                    duration: Duration(milliseconds: 600 + (index * 200)),
+                    curve: Curves.easeInOut,
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    height: 8,
+                    width: 8,
+                    decoration: BoxDecoration(
+                      color: Color(0xFFDA9BF5).withOpacity(0.7),
+                      shape: BoxShape.circle,
+                    ),
+                  );
+                }),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPhoneTextField() {
     return TextField(
       controller: _phoneController,
-      keyboardType: TextInputType.number, // Pure number keyboard
+      keyboardType: TextInputType.number,
       inputFormatters: [
-        FilteringTextInputFormatter.digitsOnly, // Only allow digits
-        LengthLimitingTextInputFormatter(11), // Max 11 digits
+        FilteringTextInputFormatter.digitsOnly,
+        LengthLimitingTextInputFormatter(11),
       ],
       decoration: InputDecoration(
         prefixIcon: Icon(Icons.phone, color: Color(0xFFFB81EE)),
@@ -460,7 +641,7 @@ class _RegisterPageState extends State<RegisterPage> {
             ? IconButton(
           icon: Icon(
             isTextVisible ? Icons.visibility : Icons.visibility_off,
-            color: Color(0xFFFB81EE), // Changed to pink color
+            color: Color(0xFFFB81EE),
           ),
           onPressed: toggleVisibility,
         )

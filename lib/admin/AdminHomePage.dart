@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:blush_up/admin/AdminMakeupArtistDetails.dart';
+import 'package:blush_up/admin/AdminNavigation.dart';
 
 class AdminHomePage extends StatefulWidget {
   const AdminHomePage({super.key});
@@ -15,12 +16,18 @@ class _AdminHomePageState extends State<AdminHomePage> with WidgetsBindingObserv
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _allMakeupArtists = [];
   List<Map<String, dynamic>> _pendingMakeupArtists = [];
-  List<Map<String, dynamic>> _filteredAllMakeupArtists = [];
   List<Map<String, dynamic>> _filteredPendingMakeupArtists = [];
-  final ImagePicker _picker = ImagePicker();
   String? _currentUserId;
   bool _isSearching = false;
   bool _isLoading = false;
+
+  // Statistics
+  Map<String, int> _statusCounts = {
+    'pending': 0,
+    'approved': 0,
+    'rejected': 0,
+    'total': 0,
+  };
 
   @override
   void dispose() {
@@ -33,24 +40,15 @@ class _AdminHomePageState extends State<AdminHomePage> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _searchController.addListener(() {
+      setState(() {});
+    });
     _getCurrentUser();
   }
 
-  // This method is called when the app lifecycle changes
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // App came back to foreground, refresh data
-      _refreshData();
-    }
-  }
-
-  // Add this method to handle route awareness
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // This will be called every time the page is navigated to
-    if (mounted && _currentUserId != null) {
       _refreshData();
     }
   }
@@ -65,83 +63,60 @@ class _AdminHomePageState extends State<AdminHomePage> with WidgetsBindingObserv
     }
   }
 
-  // New refresh method
   Future<void> _refreshData() async {
     if (_currentUserId != null && mounted) {
-      print('🔄 Refreshing data...');
       await fetchMakeupArtists();
     }
   }
 
-  // Add pull-to-refresh functionality
   Future<void> _onRefresh() async {
     await _refreshData();
   }
 
-  // Navigation method to artist details page
   Future<void> _navigateToArtistDetails(Map<String, dynamic> artist) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => AdminMakeUpArtistDetails(
-          makeupArtistId: artist['artist_id'],
-        ),
+        builder: (context) =>
+            AdminMakeUpArtistDetails(
+              makeupArtistId: artist['artist_id'],
+            ),
       ),
     );
+    _refreshData();
+  }
 
-    // Always refresh the data when returning from details page
-    // since the status might have been changed
-    _refreshData(); // or whatever your refresh method is called
+  void _navigateToFullList(String status) {
+    final navigationState = context.findAncestorStateOfType<
+        AdminMainNavigationState>();
+    navigationState?.navigateToList(status);
   }
 
   Future<void> _handleTextSearch(BuildContext context, String query) async {
     setState(() {
       _isSearching = true;
     });
+
     try {
       final lowerQuery = query.toLowerCase();
-
-      // Filter pending makeup artists based on search query
-      List<Map<String, dynamic>> filteredPending = _pendingMakeupArtists.where((artist) {
+      List<Map<String, dynamic>> filteredPending = _pendingMakeupArtists.where((
+          artist) {
         final studioName = artist['studio_name']?.toLowerCase() ?? '';
-        final category = artist['category']?.toLowerCase() ?? '';
-        final status = artist['status']?.toLowerCase() ?? '';
-
-        return studioName.contains(lowerQuery) ||
-            category.contains(lowerQuery) ||
-            status.contains(lowerQuery);
-      }).toList();
-
-      // Filter all makeup artists based on search query
-      List<Map<String, dynamic>> filteredAll = _allMakeupArtists.where((artist) {
-        final studioName = artist['studio_name']?.toLowerCase() ?? '';
-        final category = artist['category']?.toLowerCase() ?? '';
-        final status = artist['status']?.toLowerCase() ?? '';
-
-        return studioName.contains(lowerQuery) ||
-            category.contains(lowerQuery) ||
-            status.contains(lowerQuery);
+        final categories = artist['category'] as List<String>? ?? [];
+        final categoryMatch = categories.any((cat) =>
+            cat.toLowerCase().contains(lowerQuery));
+        return studioName.contains(lowerQuery) || categoryMatch;
       }).toList();
 
       setState(() {
         _filteredPendingMakeupArtists = filteredPending;
-        _filteredAllMakeupArtists = filteredAll;
         _isSearching = false;
       });
-
-      print('✅ Found ${filteredPending.length} pending makeup artists matching search');
-      print('✅ Found ${filteredAll.length} total makeup artists matching search');
-
     } catch (e) {
       print('❌ Error searching makeup artists: $e');
       setState(() {
         _isSearching = false;
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error searching makeup artists: ${e.toString()}')),
-        );
-      }
     }
   }
 
@@ -153,9 +128,6 @@ class _AdminHomePageState extends State<AdminHomePage> with WidgetsBindingObserv
     });
 
     try {
-      print('📡 Fetching fresh data from Firestore...');
-
-      // Fetch ALL makeup artists (no status filter)
       final makeupArtistsSnapshot = await FirebaseFirestore.instance
           .collection('makeup_artists')
           .get();
@@ -163,41 +135,65 @@ class _AdminHomePageState extends State<AdminHomePage> with WidgetsBindingObserv
       List<Map<String, dynamic>> allMakeupArtistsData = [];
       List<Map<String, dynamic>> pendingMakeupArtistsData = [];
 
+      Map<String, int> statusCounts = {
+        'pending': 0,
+        'approved': 0,
+        'rejected': 0,
+        'total': 0,
+      };
+
       for (var artistDoc in makeupArtistsSnapshot.docs) {
         final artistData = artistDoc.data();
         final artistId = artistDoc.id;
 
-        // Get the user_id reference
         final userRef = artistData['user_id'] as DocumentReference?;
         String? profilePicture;
 
         if (userRef != null) {
           try {
-            // Fetch user data to get profile picture
             final userDoc = await userRef.get();
             final userData = userDoc.data() as Map<String, dynamic>?;
             profilePicture = userData?['profile pictures'] ?? '';
           } catch (e) {
-            print('Error fetching user data for artist $artistId: $e');
             profilePicture = '';
           }
+        }
+
+        List<String> categories = [];
+        final categoryData = artistData['category'];
+
+        if (categoryData is List) {
+          categories = categoryData.map((item) => item.toString()).toList();
+        } else if (categoryData is String) {
+          categories = [categoryData];
         }
 
         final artistMap = {
           'artist_id': artistId,
           'studio_name': artistData['studio_name'] ?? 'Unknown Studio',
-          'category': artistData['category'] ?? 'Unknown Category',
+          'category': categories,
+          'category_display': _formatCategoriesForDisplay(categories),
           'status': artistData['status'] ?? 'Unknown',
           'profile_picture': profilePicture ?? '',
           'user_id': userRef?.id ?? '',
         };
 
-        // Add to all artists list
         allMakeupArtistsData.add(artistMap);
+        statusCounts['total'] = statusCounts['total']! + 1;
 
-        // Add to pending list if status is pending
-        if (artistData['status'] == 'Pending') {
-          pendingMakeupArtistsData.add(artistMap);
+        final status = artistData['status']?.toLowerCase() ?? '';
+        switch (status) {
+          case 'pending':
+            pendingMakeupArtistsData.add(artistMap);
+            statusCounts['pending'] = statusCounts['pending']! + 1;
+            break;
+          case 'approved':
+            statusCounts['approved'] = statusCounts['approved']! + 1;
+            break;
+          case 'rejected':
+          case 'disabled':
+            statusCounts['rejected'] = statusCounts['rejected']! + 1;
+            break;
         }
       }
 
@@ -205,163 +201,644 @@ class _AdminHomePageState extends State<AdminHomePage> with WidgetsBindingObserv
         setState(() {
           _allMakeupArtists = allMakeupArtistsData;
           _pendingMakeupArtists = pendingMakeupArtistsData;
-          // Initialize filtered lists with all data
-          _filteredAllMakeupArtists = allMakeupArtistsData;
           _filteredPendingMakeupArtists = pendingMakeupArtistsData;
+          _statusCounts = statusCounts;
           _isLoading = false;
         });
       }
-
-      print('✅ Fetched ${allMakeupArtistsData.length} total makeup artists');
-      print('✅ Found ${pendingMakeupArtistsData.length} pending makeup artists');
     } catch (e) {
       print('❌ Error fetching makeup artists: $e');
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading makeup artists: ${e.toString()}')),
-        );
       }
     }
   }
 
-  Widget _buildHorizontalMakeupArtistList(List<Map<String, dynamic>> makeupArtists) {
-    return SizedBox(
-      height: 300,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: makeupArtists.length,
-        itemBuilder: (context, index) {
-          final artist = makeupArtists[index];
-          return Container(
-            width: 200,
-            margin: const EdgeInsets.only(right: 16),
-            child: GestureDetector(
-              onTap: () => _navigateToArtistDetails(artist),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: Container(
-                        width: double.infinity,
-                        decoration: const BoxDecoration(
-                          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-                          color: Color(0xFFFFB347),
+  String _formatCategoriesForDisplay(List<String> categories) {
+    if (categories.isEmpty) return 'No Category';
+    if (categories.length == 1) return categories[0];
+    if (categories.length <= 2) return categories.join(' & ');
+    return '${categories.take(2).join(', ')} & ${categories.length - 2} more';
+  }
+
+//   // Simplified Statistics Overview
+//   Widget _buildStatsOverview() {
+//     return Container(
+//       padding: const EdgeInsets.all(20),
+//       margin: const EdgeInsets.symmetric(horizontal: 16),
+//       decoration: BoxDecoration(
+//         color: Colors.white,
+//         borderRadius: BorderRadius.circular(16),
+//         boxShadow: [
+//           BoxShadow(
+//             color: Colors.black.withOpacity(0.1),
+//             blurRadius: 10,
+//             offset: const Offset(0, 4),
+//           ),
+//         ],
+//       ),
+//       child: Column(
+//         crossAxisAlignment: CrossAxisAlignment.start,
+//         children: [
+//           Text(
+//             'Dashboard Overview',
+//             style: TextStyle(
+//               fontSize: 20,
+//               fontWeight: FontWeight.bold,
+//               color: Colors.grey[800],
+//             ),
+//           ),
+//           const SizedBox(height: 20),
+//           Row(
+//             children: [
+//               Expanded(
+//                 child: _buildStatItem(
+//                   'Total Artists',
+//                   _statusCounts['total']!,
+//                   Colors.blue,
+//                   Icons.people,
+//                 ),
+//               ),
+//               Container(width: 1, height: 50, color: Colors.grey[300]),
+//               Expanded(
+//                 child: _buildStatItem(
+//                   'Approved',
+//                   _statusCounts['approved']!,
+//                   Colors.green,
+//                   Icons.check_circle,
+//                 ),
+//               ),
+//               Container(width: 1, height: 50, color: Colors.grey[300]),
+//               Expanded(
+//                 child: _buildStatItem(
+//                   'Pending',
+//                   _statusCounts['pending']!,
+//                   Colors.orange,
+//                   Icons.hourglass_empty,
+//                 ),
+//               ),
+//             ],
+//           ),
+//         ],
+//       ),
+//     );
+//   }
+//
+//   Widget _buildStatItem(String title, int count, Color color, IconData icon) {
+//     return Column(
+//       children: [
+//         Icon(icon, color: color, size: 24),
+//         const SizedBox(height: 8),
+//         Text(
+//           count.toString(),
+//           style: TextStyle(
+//             fontSize: 24,
+//             fontWeight: FontWeight.bold,
+//             color: color,
+//           ),
+//         ),
+//         Text(
+//           title,
+//           style: TextStyle(
+//             fontSize: 12,
+//             color: Colors.grey[600],
+//             fontWeight: FontWeight.w500,
+//           ),
+//           textAlign: TextAlign.center,
+//         ),
+//       ],
+//     );
+//   }
+//
+//   // Simplified Reports Overview
+//   Widget _buildReportsOverview() {
+//     return StreamBuilder<QuerySnapshot>(
+//       stream: FirebaseFirestore.instance.collection('reports').snapshots(),
+//       builder: (context, snapshot) {
+//         if (!snapshot.hasData) {
+//           return Container(
+//             height: 120,
+//             margin: const EdgeInsets.symmetric(horizontal: 16),
+//             child: Center(child: CircularProgressIndicator()),
+//           );
+//         }
+//
+//         final reports = snapshot.data!.docs;
+//         final pendingReports = reports.where((doc) =>
+//         (doc.data() as Map<String, dynamic>)['status'] == 'pending').length;
+//         final totalReports = reports.length;
+//
+//         return Container(
+//           padding: const EdgeInsets.all(20),
+//           margin: const EdgeInsets.symmetric(horizontal: 16),
+//           decoration: BoxDecoration(
+//             color: Colors.white,
+//             borderRadius: BorderRadius.circular(16),
+//             boxShadow: [
+//               BoxShadow(
+//                 color: Colors.black.withOpacity(0.1),
+//                 blurRadius: 10,
+//                 offset: const Offset(0, 4),
+//               ),
+//             ],
+//           ),
+//           child: Column(
+//             crossAxisAlignment: CrossAxisAlignment.start,
+//             children: [
+//               Row(
+//                 children: [
+//                   Icon(Icons.report_problem, color: Colors.red, size: 24),
+//                   const SizedBox(width: 12),
+//                   Text(
+//                     'Reports',
+//                     style: TextStyle(
+//                       fontSize: 20,
+//                       fontWeight: FontWeight.bold,
+//                       color: Colors.grey[800],
+//                     ),
+//                   ),
+//                 ],
+//               ),
+//               const SizedBox(height: 16),
+//               Row(
+//                 children: [
+//                   Expanded(
+//                     child: Column(
+//                       children: [
+//                         Text(
+//                           totalReports.toString(),
+//                           style: TextStyle(
+//                             fontSize: 24,
+//                             fontWeight: FontWeight.bold,
+//                             color: Colors.red,
+//                           ),
+//                         ),
+//                         Text(
+//                           'Total Reports',
+//                           style: TextStyle(
+//                             fontSize: 12,
+//                             color: Colors.grey[600],
+//                           ),
+//                         ),
+//                       ],
+//                     ),
+//                   ),
+//                   Container(width: 1, height: 40, color: Colors.grey[300]),
+//                   Expanded(
+//                     child: Column(
+//                       children: [
+//                         Text(
+//                           pendingReports.toString(),
+//                           style: TextStyle(
+//                             fontSize: 24,
+//                             fontWeight: FontWeight.bold,
+//                             color: Colors.orange,
+//                           ),
+//                         ),
+//                         Text(
+//                           'Pending',
+//                           style: TextStyle(
+//                             fontSize: 12,
+//                             color: Colors.grey[600],
+//                           ),
+//                         ),
+//                       ],
+//                     ),
+//                   ),
+//                 ],
+//               ),
+//             ],
+//           ),
+//         );
+//       },
+//     );
+//   }
+//
+  Widget _buildHorizontalMakeupArtistList(
+    List<Map<String, dynamic>> makeupArtists,
+    {int? limit, bool showShowAllCard = false}
+    ) {
+  // Apply limit if specified
+  final displayArtists = limit != null && makeupArtists.length > limit
+      ? makeupArtists.take(limit).toList()
+      : makeupArtists;
+
+  return SizedBox(
+    height: 280,
+    child: ListView.builder(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      itemCount: showShowAllCard && makeupArtists.length > (limit ?? 0)
+          ? displayArtists.length + 1  // Add 1 for "Show All" card
+          : displayArtists.length,
+      itemBuilder: (context, index) {
+        // Check if this is the "Show All" card
+        if (showShowAllCard &&
+            makeupArtists.length > (limit ?? 0) &&
+            index == displayArtists.length) {
+          return _buildShowMoreCard(makeupArtists.length);
+        }
+
+        final artist = displayArtists[index];
+        return Container(
+          width: 180,
+          margin: const EdgeInsets.only(right: 16),
+          child: GestureDetector(
+            onTap: () => _navigateToArtistDetails(artist),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: Container(
+                      width: double.infinity,
+                      decoration: const BoxDecoration(
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                        color: Color(0xFFFFB347),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                        child: artist['profile_picture'] != null &&
+                            artist['profile_picture'].isNotEmpty
+                            ? Image.network(
+                          artist['profile_picture'],
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Center(
+                              child: Icon(Icons.person, size: 50, color: Colors.white),
+                            );
+                          },
+                        )
+                            : const Center(
+                          child: Icon(Icons.person, size: 50, color: Colors.white),
                         ),
-                        child: ClipRRect(
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                          child: artist['profile_picture'] != null &&
-                              artist['profile_picture'].isNotEmpty
-                              ? Image.network(
-                            artist['profile_picture'],
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return const Center(
-                                child: Icon(Icons.person, size: 50, color: Colors.white),
-                              );
-                            },
-                          )
-                              : const Center(
-                            child: Icon(Icons.person, size: 50, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            artist['studio_name'] ?? 'Unknown Studio',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black,
+                            ),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      flex: 2,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              artist['studio_name'] ?? 'Unknown Studio',
+                          const SizedBox(height: 4),
+                          Text(
+                            artist['category_display'] ?? 'No Category',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey,
+                            ),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.orange,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              artist['status'] ?? 'Unknown',
                               style: const TextStyle(
-                                fontSize: 14,
+                                fontSize: 10,
+                                color: Colors.white,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.black,
-                              ),
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              artist['category'] ?? '',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey,
-                              ),
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 8),
-                            // Status indicator with different colors
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: _getStatusColor(artist['status']),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                artist['status'] ?? 'Unknown',
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                ),
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          );
-        },
+          ),
+        );
+      },
+    ),
+  );
+}
+
+// method for the "Show More" card:
+Widget _buildShowMoreCard(int totalCount) {
+  return Container(
+    width: 180,
+    margin: const EdgeInsets.only(right: 16),
+    child: GestureDetector(
+      onTap: () => _navigateToFullList('pending'),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.orange, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.arrow_forward,
+              size: 50,
+              color: Colors.orange,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Show More',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '$totalCount requests',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
       ),
-    );
-  }
-
-  Color _getStatusColor(String? status) {
-    switch (status?.toLowerCase()) {
-      case 'pending':
-        return Colors.orange;
-      case 'approved':
-        return Colors.green;
-      case 'rejected'||'disabled':
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
-  }
-
+    ),
+  );
+}
+//
+//   // Simplified Request List
+//   Widget _buildRequestsList() {
+//     return Container(
+//       margin: const EdgeInsets.symmetric(horizontal: 16),
+//       decoration: BoxDecoration(
+//         color: Colors.white,
+//         borderRadius: BorderRadius.circular(16),
+//         boxShadow: [
+//           BoxShadow(
+//             color: Colors.black.withOpacity(0.1),
+//             blurRadius: 10,
+//             offset: const Offset(0, 4),
+//           ),
+//         ],
+//       ),
+//       child: Column(
+//         crossAxisAlignment: CrossAxisAlignment.start,
+//         children: [
+//           Padding(
+//             padding: const EdgeInsets.all(20),
+//             child: Row(
+//               children: [
+//                 Icon(Icons.pending_actions, color: Colors.orange, size: 24),
+//                 const SizedBox(width: 12),
+//                 Text(
+//                   'Pending Requests',
+//                   style: TextStyle(
+//                     fontSize: 20,
+//                     fontWeight: FontWeight.bold,
+//                     color: Colors.grey[800],
+//                   ),
+//                 ),
+//                 const Spacer(),
+//                 Text(
+//                   '${_filteredPendingMakeupArtists.length}',
+//                   style: TextStyle(
+//                     fontSize: 18,
+//                     fontWeight: FontWeight.bold,
+//                     color: Colors.orange,
+//                   ),
+//                 ),
+//               ],
+//             ),
+//           ),
+//           if (_filteredPendingMakeupArtists.isEmpty)
+//             Container(
+//               height: 100,
+//               child: Center(
+//                 child: Text(
+//                   'No pending requests',
+//                   style: TextStyle(
+//                     color: Colors.grey[600],
+//                     fontSize: 16,
+//                   ),
+//                 ),
+//               ),
+//             )
+//           else
+//             Padding(
+//               padding: const EdgeInsets.only(bottom: 20),
+//               child: _buildHorizontalMakeupArtistList(_filteredPendingMakeupArtists.take(5).toList()),
+//             ),
+//           if (_filteredPendingMakeupArtists.length > 5)
+//             Padding(
+//               padding: const EdgeInsets.only(bottom: 16),
+//               child: Center(
+//                 child: TextButton(
+//                   onPressed: () => _navigateToFullList('pending'),
+//                   child: Text(
+//                     'View All ${_filteredPendingMakeupArtists.length} Requests',
+//                     style: TextStyle(
+//                       color: Colors.orange,
+//                       fontWeight: FontWeight.w600,
+//                     ),
+//                   ),
+//                 ),
+//               ),
+//             ),
+//         ],
+//       ),
+//     );
+//   }
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     return Scaffold(
+//       body: Stack(
+//         children: [
+//           // Background
+//           Container(
+//             decoration: const BoxDecoration(
+//               image: DecorationImage(
+//                 image: AssetImage('assets/purple_background.png'),
+//                 fit: BoxFit.cover,
+//               ),
+//             ),
+//           ),
+//           // Content
+//           SafeArea(
+//             child: _currentUserId == null
+//                 ? const Center(child: CircularProgressIndicator())
+//                 : RefreshIndicator(
+//               onRefresh: _onRefresh,
+//               child: SingleChildScrollView(
+//                 physics: const AlwaysScrollableScrollPhysics(),
+//                 child: Column(
+//                   crossAxisAlignment: CrossAxisAlignment.start,
+//                   children: [
+//                     // Header
+//                     Padding(
+//                       padding: const EdgeInsets.all(16),
+//                       child: Column(
+//                         crossAxisAlignment: CrossAxisAlignment.start,
+//                         children: [
+//                           Row(
+//                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//                             children: [
+//                               Text(
+//                                 "Admin Dashboard",
+//                                 style: TextStyle(
+//                                   fontSize: 28,
+//                                   fontWeight: FontWeight.bold,
+//                                   color: Colors.black,
+//                                 ),
+//                               ),
+//                               if (_isLoading)
+//                                 SizedBox(
+//                                   width: 20,
+//                                   height: 20,
+//                                   child: CircularProgressIndicator(
+//                                     strokeWidth: 2,
+//                                     valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+//                                   ),
+//                                 ),
+//                             ],
+//                           ),
+//                           const SizedBox(height: 16),
+//                           // Search Bar
+//                           Container(
+//                             padding: const EdgeInsets.symmetric(horizontal: 16),
+//                             decoration: BoxDecoration(
+//                               color: Colors.white,
+//                               borderRadius: BorderRadius.circular(25),
+//                               boxShadow: [
+//                                 BoxShadow(
+//                                   color: Colors.black.withOpacity(0.1),
+//                                   blurRadius: 8,
+//                                   offset: const Offset(0, 2),
+//                                 ),
+//                               ],
+//                             ),
+//                             child: Row(
+//                               children: [
+//                                 Expanded(
+//                                   child: TextField(
+//                                     controller: _searchController,
+//                                     decoration: const InputDecoration(
+//                                       hintText: "Search pending requests...",
+//                                       border: InputBorder.none,
+//                                       hintStyle: TextStyle(color: Colors.grey),
+//                                     ),
+//                                     onChanged: (text) {
+//                                       if (text.isEmpty) {
+//                                         setState(() {
+//                                           _filteredPendingMakeupArtists = _pendingMakeupArtists;
+//                                         });
+//                                       } else {
+//                                         _handleTextSearch(context, text.trim());
+//                                       }
+//                                     },
+//                                     onSubmitted: (text) {
+//                                       if (text.trim().isNotEmpty) {
+//                                         _handleTextSearch(context, text.trim());
+//                                       }
+//                                     },
+//                                   ),
+//                                 ),
+//                                 IconButton(
+//                                   icon: _searchController.text.isNotEmpty
+//                                       ? const Icon(Icons.clear, color: Colors.grey)
+//                                       : const Icon(Icons.search, color: Colors.grey),
+//                                   onPressed: () {
+//                                     if (_searchController.text.isNotEmpty) {
+//                                       _searchController.clear();
+//                                       setState(() {
+//                                         _filteredPendingMakeupArtists = _pendingMakeupArtists;
+//                                       });
+//                                     } else {
+//                                       final query = _searchController.text.trim();
+//                                       if (query.isNotEmpty) {
+//                                         _handleTextSearch(context, query);
+//                                       }
+//                                     }
+//                                   },
+//                                 ),
+//                               ],
+//                             ),
+//                           ),
+//                         ],
+//                       ),
+//                     ),
+//
+//                     // Content
+//                     if (_isLoading)
+//                       Container(
+//                         height: 300,
+//                         child: Center(
+//                           child: CircularProgressIndicator(
+//                             valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+//                           ),
+//                         ),
+//                       )
+//                     else ...[
+//                       const SizedBox(height: 8),
+//                       // Stats Overview
+//                       _buildStatsOverview(),
+//                       const SizedBox(height: 16),
+//                       // Reports Overview
+//                       _buildReportsOverview(),
+//                       const SizedBox(height: 16),
+//                       // Requests List
+//                       _buildRequestsList(),
+//                       const SizedBox(height: 24),
+//                     ],
+//                   ],
+//                 ),
+//               ),
+//             ),
+//           ),
+//         ],
+//       ),
+//     );
+//   }
+// }
   @override
   Widget build(BuildContext context) {
-    final bool hasSearchQuery = _searchController.text.isNotEmpty;
-
     return Scaffold(
       body: Stack(
         children: [
+          // Background
           Container(
             decoration: const BoxDecoration(
               image: DecorationImage(
@@ -370,230 +847,445 @@ class _AdminHomePageState extends State<AdminHomePage> with WidgetsBindingObserv
               ),
             ),
           ),
+          // Content
           SafeArea(
             child: _currentUserId == null
                 ? const Center(child: CircularProgressIndicator())
                 : RefreshIndicator(
               onRefresh: _onRefresh,
-              child: _allMakeupArtists.isEmpty && !hasSearchQuery && !_isLoading
-                  ? const Center(child: Text('No data available. Pull to refresh.'))
-                  : Column(
-                children: [
-                  // Fixed header section
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              "Admin Dashboard",
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                "Admin Dashboard",
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black,
+                                ),
                               ),
+                              if (_isLoading)
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          // Search Bar
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(25),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.1),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                             ),
-                            if (_isLoading)
-                              const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                          ],
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _searchController,
+                                    decoration: const InputDecoration(
+                                      hintText: "Search pending requests...",
+                                      border: InputBorder.none,
+                                      hintStyle: TextStyle(color: Colors.grey),
+                                    ),
+                                    onChanged: (text) {
+                                      if (text.isEmpty) {
+                                        setState(() {
+                                          _filteredPendingMakeupArtists =
+                                              _pendingMakeupArtists;
+                                        });
+                                      } else {
+                                        _handleTextSearch(context, text.trim());
+                                      }
+                                    },
+                                    onSubmitted: (text) {
+                                      if (text
+                                          .trim()
+                                          .isNotEmpty) {
+                                        _handleTextSearch(context, text.trim());
+                                      }
+                                    },
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: _searchController.text.isNotEmpty
+                                      ? const Icon(
+                                      Icons.clear, color: Colors.grey)
+                                      : const Icon(
+                                      Icons.search, color: Colors.grey),
+                                  onPressed: () {
+                                    if (_searchController.text.isNotEmpty) {
+                                      _searchController.clear();
+                                      setState(() {
+                                        _filteredPendingMakeupArtists =
+                                            _pendingMakeupArtists;
+                                      });
+                                    } else {
+                                      final query = _searchController.text
+                                          .trim();
+                                      if (query.isNotEmpty) {
+                                        _handleTextSearch(context, query);
+                                      }
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Content
+                    if (_isLoading)
+                      Container(
+                        height: 300,
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white),
+                          ),
                         ),
-                        const SizedBox(height: 16),
+                      )
+                    else
+                      ...[
+                        const SizedBox(height: 8),
+
+                        // Stats Overview
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          padding: const EdgeInsets.all(20),
+                          margin: const EdgeInsets.symmetric(horizontal: 16),
                           decoration: BoxDecoration(
                             color: Colors.white,
-                            borderRadius: BorderRadius.circular(25),
+                            borderRadius: BorderRadius.circular(16),
                             boxShadow: [
                               BoxShadow(
                                 color: Colors.black.withOpacity(0.1),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
                               ),
                             ],
                           ),
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _searchController,
-                                  decoration: const InputDecoration(
-                                    hintText: "Search by name/ category / status",
-                                    border: InputBorder.none,
-                                    hintStyle: TextStyle(color: Colors.grey),
-                                  ),
-                                  onChanged: (text) {
-                                    if (text.isEmpty) {
-                                      setState(() {
-                                        _filteredAllMakeupArtists = _allMakeupArtists;
-                                        _filteredPendingMakeupArtists = _pendingMakeupArtists;
-                                      });
-                                    }
-                                  },
-                                  onSubmitted: (text) {
-                                    if (text.trim().isNotEmpty) {
-                                      _handleTextSearch(context, text.trim());
-                                    }
-                                  },
+                              Text(
+                                'Dashboard Overview',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey[800],
                                 ),
                               ),
-                              IconButton(
-                                icon: _isSearching
-                                    ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                                    : const Icon(Icons.search, color: Colors.grey),
-                                onPressed: _isSearching ? null : () {
-                                  final query = _searchController.text.trim();
-                                  if (query.isNotEmpty) {
-                                    _handleTextSearch(context, query);
-                                  }
-                                },
+                              const SizedBox(height: 20),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        Icon(Icons.people, color: Colors.blue,
+                                            size: 24),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          _statusCounts['total']!.toString(),
+                                          style: TextStyle(
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.blue,
+                                          ),
+                                        ),
+                                        Text(
+                                          'Total Artists',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey[600],
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Container(width: 1,
+                                      height: 50,
+                                      color: Colors.grey[300]),
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        Icon(Icons.check_circle,
+                                            color: Colors.green, size: 24),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          _statusCounts['approved']!.toString(),
+                                          style: TextStyle(
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.green,
+                                          ),
+                                        ),
+                                        Text(
+                                          'Approved',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey[600],
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Container(width: 1,
+                                      height: 50,
+                                      color: Colors.grey[300]),
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        Icon(Icons.hourglass_empty,
+                                            color: Colors.orange, size: 24),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          _statusCounts['pending']!.toString(),
+                                          style: TextStyle(
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.orange,
+                                          ),
+                                        ),
+                                        Text(
+                                          'Pending',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.grey[600],
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                  // Scrollable content section
-                  Expanded(
-                    child: _isLoading
-                        ? _buildContentLoadingIndicator()
-                        : SingleChildScrollView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const SizedBox(height: 24),
 
-                            // Pending Makeup Artists Section
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "Pending Makeup Artists",
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black,
-                                  ),
-                                ),
-                                if (_filteredPendingMakeupArtists.isNotEmpty)
-                                  Text(
-                                    "Swipe to see more →",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.black.withOpacity(0.8),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
+                        const SizedBox(height: 16),
 
-                            if (_filteredPendingMakeupArtists.isEmpty)
-                              Container(
-                                height: 100,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
+                        // Reports Overview
+                        StreamBuilder<QuerySnapshot>(
+                          stream: FirebaseFirestore.instance.collection(
+                              'reports').snapshots(),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return Container(
+                                height: 120,
+                                margin: const EdgeInsets.symmetric(
+                                    horizontal: 16),
                                 child: Center(
-                                  child: Text(
-                                    hasSearchQuery
-                                        ? 'No pending makeup artists found matching your search'
-                                        : 'No pending makeup artists',
-                                    style: const TextStyle(color: Colors.black),
-                                  ),
-                                ),
-                              )
-                            else
-                              _buildHorizontalMakeupArtistList(_filteredPendingMakeupArtists),
+                                    child: CircularProgressIndicator()),
+                              );
+                            }
 
-                            const SizedBox(height: 40),
+                            final reports = snapshot.data!.docs;
+                            final pendingReports = reports.where((doc) =>
+                            (doc.data() as Map<String, dynamic>)['status'] ==
+                                'pending').length;
+                            final totalReports = reports.length;
 
-                            // All Makeup Artists Section
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "All Makeup Artists",
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black,
+                            return Container(
+                              padding: const EdgeInsets.all(20),
+                              margin: const EdgeInsets.symmetric(
+                                  horizontal: 16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.1),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
                                   ),
-                                ),
-                                if (_filteredAllMakeupArtists.isNotEmpty)
-                                  Text(
-                                    "Swipe to see more →",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.black.withOpacity(0.8),
-                                    ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.report_problem,
+                                          color: Colors.red, size: 24),
+                                      const SizedBox(width: 12),
+                                      Text(
+                                        'Reports',
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.grey[800],
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-
-                            if (_filteredAllMakeupArtists.isEmpty)
-                              Container(
-                                height: 100,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    hasSearchQuery
-                                        ? 'No makeup artists found matching your search'
-                                        : 'No makeup artists found',
-                                    style: const TextStyle(color: Colors.black),
+                                  const SizedBox(height: 16),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          children: [
+                                            Text(
+                                              totalReports.toString(),
+                                              style: TextStyle(
+                                                fontSize: 24,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.red,
+                                              ),
+                                            ),
+                                            Text(
+                                              'Total Reports',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Container(width: 1,
+                                          height: 40,
+                                          color: Colors.grey[300]),
+                                      Expanded(
+                                        child: Column(
+                                          children: [
+                                            Text(
+                                              pendingReports.toString(),
+                                              style: TextStyle(
+                                                fontSize: 24,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.orange,
+                                              ),
+                                            ),
+                                            Text(
+                                              'Pending',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[600],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ),
-                              )
-                            else
-                              _buildHorizontalMakeupArtistList(_filteredAllMakeupArtists),
-
-                            const SizedBox(height: 20),
-                          ],
+                                ],
+                              ),
+                            );
+                          },
                         ),
-                      ),
-                    ),
-                  ),
-                ],
+
+                        const SizedBox(height: 16),
+
+                        // Requests List
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(Icons.pending_actions, color: Colors.orange, size: 24),
+                                        const SizedBox(width: 12),
+                                        Text(
+                                          'Pending',
+                                          style: TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.grey[800],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (_filteredPendingMakeupArtists.isNotEmpty)
+                                      Text(
+                                        "Swipe to see more →",
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.black.withOpacity(0.8),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              if (_filteredPendingMakeupArtists.isEmpty)
+                                Container(
+                                  height: 100,
+                                  child: Center(
+                                    child: Text(
+                                      'No pending requests',
+                                      style: TextStyle(
+                                        color: Colors.grey[600],
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              else
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 20),
+                                  child: _buildHorizontalMakeupArtistList(
+                                    _filteredPendingMakeupArtists,
+                                    limit: 10,
+                                    showShowAllCard: _filteredPendingMakeupArtists.length > 10,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+                      ],
+                  ],
+                ),
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-  Widget _buildContentLoadingIndicator() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFB266FF)),
-            strokeWidth: 6,
-          ),
-          const SizedBox(height: 20),
-          Text(
-            'Loading makeup artists...',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.grey[800],
             ),
           ),
         ],
